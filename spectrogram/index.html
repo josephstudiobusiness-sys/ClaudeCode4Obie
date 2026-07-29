@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="./coi-serviceworker.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spectrogram — ObieWebApp</title>
+
+  <link rel="stylesheet" href="./css/theme.css">
+  <link rel="stylesheet" href="./spectrogram.css">
+
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js" crossorigin="anonymous"></script>
+
+  <!-- PyScript 2026.3.1 -->
+  <link  rel="stylesheet" href="https://pyscript.net/releases/2026.3.1/core.css">
+  <script type="module"   src="https://pyscript.net/releases/2026.3.1/core.js"></script>
+
+  <!-- Shared JS — order matters -->
+  <script src="./js/plotly-theme.js"></script>
+  <script src="./js/audio.js"></script>
+  <script src="./js/browser-check.js"></script>       <!-- Chrome check -->
+  <script src="./spectrogram.js" defer></script>
+</head>
+<body>
+
+<div id="loading" class="loading-overlay">
+  <div class="spin"></div>
+  <div class="load-title">Loading PyScript + NumPy…</div>
+  <div class="load-sub">First load may take 15–30 s</div>
+</div>
+
+<div class="sp-page">
+
+  <!-- ── Header ──────────────────────────────────────────────────────── -->
+  <header class="obie-header">
+    <span class="brand">
+      <div class="logo-icon">🎻</div>
+      <h1>ObieWebApp</h1>
+    </span>
+    <span class="crumb">· Spectrogram</span>
+    <div class="gap"></div>
+    <button class="tb-btn" onclick="specHelp()">Help</button>
+  </header>
+
+  <!-- ── Toolbar ─────────────────────────────────────────────────────── -->
+  <div class="sp-toolbar">
+    <label class="file-btn" style="width:auto">
+      <span id="wav-btn-text">📂 Load WAV</span>
+      <input type="file" id="wav-input" accept=".wav,audio/wav,audio/*" onchange="loadWAV(this)">
+    </label>
+    <span id="wav-status" class="sp-status-txt">no file loaded</span>
+    <button id="play-btn" class="tb-btn accent" data-label="WAV" onclick="togglePlay()" disabled>▶ Play</button>
+    <div class="tb-flex"></div>
+    <button id="freq-scale-btn" class="tb-btn" onclick="specToggleFreqScale()"
+            title="Toggle spectrogram frequency axis between linear and log">Freq: Lin</button>
+    <button id="chan-btn" class="tb-btn" onclick="specToggleChannel()" style="display:none">Show R ▶</button>
+    <button class="tb-btn" onclick="specPreferences()">Settings</button>
+  </div>
+
+  <!-- ── Main body: sidebar + resizer + plot area ───────────────────── -->
+  <div class="sp-body">
+
+    <!-- Left: settings sidebar -->
+    <div class="sp-sidebar">
+      <div class="sp-sect">ℹ File</div>
+      <div class="sp-content">
+        <div class="fileinfo" id="wav-info">Load a WAV file to begin.</div>
+      </div>
+
+      <div class="sp-sect">⚙️ FFT Settings</div>
+      <div class="sp-content">
+        <div class="sp-row">
+          <label for="n-fft-sel">Window size</label>
+          <select id="n-fft-sel" onchange="specSettingsChanged()">
+            <option value="512">512</option>
+            <option value="1024">1024</option>
+            <option value="2048" selected>2048</option>
+            <option value="4096">4096</option>
+            <option value="8192">8192</option>
+          </select>
+        </div>
+        <div class="sp-row">
+          <label for="hop-sel">Hop size</label>
+          <select id="hop-sel" onchange="specSettingsChanged()">
+            <option value="128">128</option>
+            <option value="256">256</option>
+            <option value="512" selected>512</option>
+            <option value="1024">1024</option>
+            <option value="2048">2048</option>
+          </select>
+        </div>
+        <div class="sp-row">
+          <label for="fmax-inp">Max freq</label>
+          <input id="fmax-inp" type="number" value="8000" min="500" max="24000" step="500" onchange="specSettingsChanged()">
+          <span class="sp-unit">Hz</span>
+        </div>
+        <div class="sp-row">
+          <label for="colorscale-sel">Colorscale</label>
+          <select id="colorscale-sel" onchange="specRenderAll()">
+            <option value="Plasma" selected>Plasma</option>
+            <option value="Viridis">Viridis</option>
+            <option value="Inferno">Inferno</option>
+            <option value="Jet">Jet</option>
+            <option value="Greys">Greyscale</option>
+          </select>
+        </div>
+        <p class="sp-hint">Higher window size = finer frequency resolution, coarser time resolution.</p>
+      </div>
+
+      <div class="sp-sect">📊 Info</div>
+      <div class="sp-content">
+        <div class="sp-info-body" id="frame-info">–</div>
+      </div>
+    </div><!-- sp-sidebar -->
+
+    <!-- Drag handle -->
+    <div id="sp-resizer" class="sp-resizer"></div>
+
+    <!-- Right: plots -->
+    <div class="sp-plot-wrap">
+      <div class="sp-plot-row sp-waveform-row">
+        <div id="waveform-plot" class="plot-div"></div>
+      </div>
+      <div class="sp-plot-row sp-spec-row">
+        <div id="spec-plot" class="plot-div"></div>
+      </div>
+    </div>
+
+  </div><!-- sp-body -->
+
+  <!-- ── Footer ──────────────────────────────────────────────────────── -->
+  <footer class="sp-footer">
+    Signal processing powered by <a href="https://github.com/chrisbuerginrogers/ObieApp" target="_blank" rel="noopener">ObieWebApp</a>
+  </footer>
+
+</div><!-- sp-page -->
+
+<!-- ── Preferences modal ─────────────────────────────────────────────── -->
+<div id="prefs-modal" class="modal-overlay">
+  <div class="modal-box" style="width:min(92vw,420px)">
+    <div class="modal-header">
+      <span class="modal-title">Spectrogram Preferences</span>
+      <button class="modal-close" onclick="specClosePrefs()">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="sp-hint" style="margin-bottom:10px">FFT settings are also editable directly in the sidebar — this dialog just confirms they're saved.</p>
+      <div class="save-row">
+        <button class="act-btn accent" onclick="specSavePrefs()">Save</button>
+        <button class="act-btn" onclick="specResetPrefs()">Reset defaults</button>
+        <button class="act-btn" onclick="specClosePrefs()">Close</button>
+        <span id="prefs-save-msg" class="save-msg"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="py" src="./main.py" config="./pyscript.toml" async></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+packages = ["numpy", "scipy"]
+
+[files]
+"./py/config.py" = "./config.py"
+"./py/dom.py"    = "./dom.py"
+"https://raw.githubusercontent.com/chrisbuerginrogers/ObieApp/main/Python/fileio/wavfileio.py"       = "./wavfileio.py"
+"https://raw.githubusercontent.com/chrisbuerginrogers/ObieApp/main/Python/processing/spectrogram.py" = "./spectrogram.py"

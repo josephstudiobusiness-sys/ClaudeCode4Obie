@@ -1,0 +1,192 @@
+/* ── White theme override (matches Explore / Acquire / Convolve) ─────── */
+:root {
+  --bg:        #ffffff;
+  --bg-deep:   #eff1f4;
+  --surface:   #ffffff;
+  --border:    #c0c4cc;
+  --text:      #1a1a1a;
+  --muted:     #5a5f6a;
+  --accent:    #b35c00;
+  --accent-2:  #d07000;
+  --green:     #2e7d32;
+  --red:       #c62828;
+  --hover:     #e4e8ee;
+}
+
+html, body { overflow: hidden; height: 100%; }
+
+/* ── Page shell ───────────────────────────────────────────────────────── */
+.sp-page { display: flex; flex-direction: column; height: 100vh; background: var(--bg); }
+
+/* ── Compact header (same as Explore / Acquire / Convolve) ──────────── */
+header.obie-header { padding: 4px 12px; min-height: 0; background: #e8d8be; border-bottom-color: #c9b48f; }
+header.obie-header h1 { font-size: 1rem; }
+header.obie-header .logo-icon { width: 26px; height: 26px; font-size: 14px; }
+header.obie-header .brand { display: flex; align-items: center; gap: 10px; }
+header.obie-header .gap { flex: 1; }
+
+/* ── Loading overlay ─────────────────────────────────────────────────── */
+.loading-overlay {
+  position: fixed; inset: 0;
+  background: rgba(255,255,255,0.92);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  z-index: 999; gap: 10px;
+}
+.loading-overlay.gone { display: none; }
+.spin {
+  width: 34px; height: 34px;
+  border: 3px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.load-title { font-size: 12px; font-weight: 500; }
+.load-sub   { font-size: 10px; color: var(--muted); }
+
+/* ── Toolbar ─────────────────────────────────────────────────────────── */
+.sp-toolbar {
+  background: var(--bg-deep); border-bottom: 1px solid var(--border);
+  padding: 3px 6px; flex-shrink: 0;
+  display: flex; align-items: center; gap: 6px; min-height: 28px;
+}
+.tb-flex { flex: 1; }
+
+.tb-btn {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 3px;
+  padding: 2px 8px; font-size: 11px; font-family: inherit;
+  color: var(--text); cursor: pointer; white-space: nowrap; line-height: 18px;
+  transition: background 0.1s, border-color 0.1s;
+}
+.tb-btn:hover:not(:disabled) { background: var(--hover); border-color: #9aa0aa; }
+.tb-btn:disabled { opacity: 0.4; cursor: default; }
+.tb-btn.accent { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.tb-btn.accent:hover:not(:disabled) { background: var(--accent-2); border-color: var(--accent-2); }
+.tb-btn.active { background: #d0d8e8; border-color: #7090b8; color: #1a2a50; font-weight: 600; }
+
+.file-btn {
+  display: inline-flex; align-items: center;
+  padding: 3px 10px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 4px; font-size: 11px; font-family: inherit;
+  color: var(--accent); cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+.file-btn:hover { background: var(--hover); border-color: var(--accent); }
+.file-btn input[type=file] { display: none; }
+
+.sp-status-txt {
+  font-size: 10px; color: var(--muted); font-style: italic;
+  white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+}
+.sp-status-txt.ok  { color: var(--green); font-style: normal; }
+.sp-status-txt.err { color: var(--red);   font-style: normal; }
+
+/* ── Main body ───────────────────────────────────────────────────────── */
+.sp-body { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Left sidebar ────────────────────────────────────────────────────── */
+.sp-sidebar {
+  width: 230px; flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  overflow-y: auto; overflow-x: hidden;
+  background: var(--bg);
+}
+.sp-sidebar::-webkit-scrollbar { width: 3px; }
+.sp-sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.sp-sect {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.6px; color: var(--muted);
+  padding: 5px 8px 4px;
+  background: var(--bg-deep); border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.sp-content { padding: 7px 8px; border-bottom: 1px solid var(--border); }
+
+.sp-row {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 8px; font-size: 11px;
+}
+.sp-row:last-child { margin-bottom: 0; }
+.sp-row label { color: var(--muted); min-width: 80px; flex-shrink: 0; }
+.sp-row select, .sp-row input {
+  flex: 1; font-size: 11px; padding: 2px 4px; max-width: 110px;
+  border: 1px solid var(--border); border-radius: 3px;
+  background: #fff; color: var(--text); font-family: inherit;
+}
+.sp-unit { font-size: 10px; color: var(--muted); }
+.sp-hint { font-size: 10px; color: var(--muted); font-style: italic; line-height: 1.4; margin-top: 4px; }
+
+.fileinfo { font-size: 10px; color: var(--muted); word-break: break-word; line-height: 1.4; }
+.sp-info-body { font-size: 10px; color: var(--muted); font-family: monospace; line-height: 1.5; white-space: pre-line; }
+
+/* ── Drag resize handle ──────────────────────────────────────────────── */
+.sp-resizer {
+  width: 5px; flex-shrink: 0; cursor: col-resize;
+  background: var(--border); transition: background 0.1s;
+}
+.sp-resizer:hover, .sp-resizer.dragging { background: var(--accent); }
+
+/* ── Plot area ───────────────────────────────────────────────────────── */
+.sp-plot-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.sp-plot-row { display: flex; flex-direction: column; overflow: hidden; }
+.sp-waveform-row { flex: 0 0 22%; border-bottom: 1px solid var(--border); }
+.sp-spec-row { flex: 1; }
+.plot-div { flex: 1; min-height: 0; width: 100%; }
+
+/* ── Footer ──────────────────────────────────────────────────────────── */
+.sp-footer {
+  flex-shrink: 0; text-align: center;
+  font-size: 10px; color: var(--muted);
+  padding: 4px; border-top: 1px solid var(--border); background: var(--bg-deep);
+}
+.sp-footer a { color: var(--accent); text-decoration: none; }
+.sp-footer a:hover { text-decoration: underline; }
+
+/* ── Modals (matches Explore) ────────────────────────────────────────── */
+.modal-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.4); z-index: 500;
+  align-items: center; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal-box {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 8px 28px rgba(0,0,0,0.22);
+  overflow: hidden; display: flex; flex-direction: column;
+  max-height: 90vh;
+}
+.modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 14px; background: var(--bg-deep);
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.modal-title { font-size: 13px; font-weight: 700; }
+.modal-close {
+  background: none; border: none; cursor: pointer;
+  font-size: 17px; color: var(--muted); line-height: 1;
+}
+.modal-close:hover { color: var(--text); }
+.modal-body { padding: 14px; overflow-y: auto; }
+
+.act-btn {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 3px;
+  padding: 1px 7px; font-size: 11px; font-family: inherit;
+  color: var(--text); cursor: pointer; white-space: nowrap; line-height: 18px;
+}
+.act-btn:hover:not(:disabled) { background: var(--hover); }
+.act-btn:disabled { opacity: 0.4; cursor: default; }
+.act-btn.accent { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.act-btn.accent:hover { background: var(--accent-2); border-color: var(--accent-2); }
+
+.save-row { display: flex; gap: 8px; margin-top: 4px; align-items: center; }
+.save-msg { font-size: 11px; color: var(--green); font-style: italic; }
+
+/* ── Responsive ──────────────────────────────────────────────────────── */
+@media (max-width: 800px) {
+  .sp-sidebar { width: 100%; height: auto; border-right: none; border-bottom: 1px solid var(--border); overflow-y: visible; }
+  .sp-body { flex-direction: column; }
+  .sp-resizer { display: none; }
+  .sp-waveform-row { flex: 0 0 160px; }
+}
