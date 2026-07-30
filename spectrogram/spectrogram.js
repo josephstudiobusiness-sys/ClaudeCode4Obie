@@ -134,7 +134,7 @@ function _maxAbs(zT) {
   return m || 1;
 }
 
-function _waterfallTraces(freqs, times, zT) {
+function _waterfallTraces(freqs, times, zT, isDiff) {
   const nT = zT.length;   // time frames (rows, after transpose)
   const maxSlices = 30;
   const step = Math.max(1, Math.round(nT / maxSlices));
@@ -143,15 +143,21 @@ function _waterfallTraces(freqs, times, zT) {
   const range = (hi - lo) || 1;
   const nSlicesShown = Math.ceil(nT / step);
   const offsetStep = Math.max(2, range / Math.max(1, nSlicesShown - 1) * 0.6);
+  const zLabel = isDiff ? 'ΔdB' : 'dB';
   const traces = [];
   let idx = 0;
   for (let t = 0; t < nT; t += step) {
     const hue = 250 - (idx / Math.max(1, nSlicesShown - 1)) * 250;   // blue (early) → red (late)
     traces.push({
       x: freqs, y: zT[t].map(v => v + idx * offsetStep),
+      // customdata carries the true (un-offset) dB value — y is shifted for
+      // display, so hovering on y directly would show the wrong number.
+      customdata: zT[t],
       type: 'scatter', mode: 'lines',
       line: { color: `hsl(${hue},70%,45%)`, width: 1 },
-      name: `t=${times[t].toFixed(2)}s`, hoverinfo: 'name', showlegend: false,
+      name: `t=${times[t].toFixed(2)}s`,
+      hovertemplate: `Freq: %{x:.0f} Hz<br>${zLabel}: %{customdata:.1f}<br>t=${times[t].toFixed(2)}s<extra></extra>`,
+      showlegend: false,
     });
     idx++;
   }
@@ -164,9 +170,13 @@ function _renderGrid(divId, cache, title, isDiff) {
   const mode = document.getElementById('view-mode-sel').value;
   const colorscale = isDiff ? 'RdBu' : document.getElementById('colorscale-sel').value;
 
+  const zLabel = isDiff ? 'ΔdB' : 'Level';
+  const hoverTemplate3D = `Freq: %{x:.0f} Hz<br>Time: %{y:.3f} s<br>${zLabel}: %{z:.1f} dB<extra></extra>`;
+
   if (mode === 'surface') {
     const trace = { x: freqs, y: times, z: zT, type: 'surface', colorscale, showscale: true,
-      colorbar: { title: isDiff ? 'ΔdB' : 'dB', titleside: 'right', thickness: 10, tickfont: { size: 9 } } };
+      colorbar: { title: isDiff ? 'ΔdB' : 'dB', titleside: 'right', thickness: 10, tickfont: { size: 9 } },
+      hovertemplate: hoverTemplate3D };
     if (isDiff) { const m = _maxAbs(zT); trace.cmin = -m; trace.cmax = m; }
     Plotly.react(divId, [trace], {
       title: { text: title, font: { size: 11 }, pad: { t: 2, b: 0 } },
@@ -180,7 +190,7 @@ function _renderGrid(divId, cache, title, isDiff) {
       margin: { l: 0, r: 0, t: 28, b: 0 },
     }, _pcfg);
   } else if (mode === 'waterfall') {
-    Plotly.react(divId, _waterfallTraces(freqs, times, zT), _wl(title, 'Frequency (Hz)',
+    Plotly.react(divId, _waterfallTraces(freqs, times, zT, isDiff), _wl(title, 'Frequency (Hz)',
       isDiff ? 'ΔdB (offset per time slice)' : 'dB (offset per time slice)', {
         margin: { l: 50, r: 20, t: 26, b: 34 },
         xaxis: { type: _logFreq ? 'log' : 'linear' },
@@ -189,7 +199,7 @@ function _renderGrid(divId, cache, title, isDiff) {
   } else {
     const trace = { x: freqs, y: times, z: zT, type: 'heatmap', colorscale, showscale: true,
       colorbar: { title: isDiff ? 'ΔdB' : 'dB', titleside: 'right', thickness: 10, len: 0.95, tickfont: { size: 9 } },
-      zsmooth: 'fast', hoverinfo: 'skip' };
+      zsmooth: 'fast', hovertemplate: hoverTemplate3D };
     if (isDiff) { const m = _maxAbs(zT); trace.zmin = -m; trace.zmax = m; }
     Plotly.react(divId, [trace], _wl(title, 'Frequency (Hz)', 'Time (s)', {
       margin: { l: 50, r: 45, t: 26, b: 34 },
