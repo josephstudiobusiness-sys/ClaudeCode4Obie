@@ -45,11 +45,11 @@
   <!-- ── Toolbar (applies to both samples) ──────────────────────────── -->
   <div class="sp-toolbar">
     <div class="tb-group">
-      <button id="mode-compare-btn" class="tb-btn active" onclick="specSetMode('compare')" title="Show Sample A and Sample B side by side">🆚 Compare</button>
-      <button id="mode-single-btn" class="tb-btn" onclick="specSetMode('single')" title="Show just one sample, full width">🔎 Single</button>
+      <button id="mode-single-btn" class="tb-btn active" onclick="specSetMode('single')" title="Show just one sample, full width">🔎 Single</button>
+      <button id="mode-compare-btn" class="tb-btn" onclick="specSetMode('compare')" title="Show Sample A and Sample B side by side">🆚 Compare</button>
       <button id="mode-diff-btn" class="tb-btn" onclick="specSetMode('diff')" title="Show the intensity difference A − B as one plot">⛰ Difference</button>
     </div>
-    <div class="tb-group" id="single-slot-group" style="display:none">
+    <div class="tb-group" id="single-slot-group">
       <button id="single-a-btn" class="tb-btn active" onclick="specSetSingleSlot('a')">Sample A</button>
       <button id="single-b-btn" class="tb-btn" onclick="specSetSingleSlot('b')">Sample B</button>
     </div>
@@ -146,7 +146,7 @@
     <div id="sp-resizer" class="sp-resizer"></div>
 
     <!-- Right: two side-by-side comparison panels -->
-    <div class="sp-compare" id="compare-view">
+    <div class="sp-compare single-a" id="compare-view">
 
       <!-- ── Sample A ──────────────────────────────────────────────── -->
       <div class="sp-panel" data-slot="a">

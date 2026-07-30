@@ -458,7 +458,7 @@ window.specToggleFreqScale = function() {
 // Single reuses the same two panels as Compare (no separate plots/render
 // path to maintain) — it just hides one side via CSS so the other fills
 // the width.
-let _mode = 'compare';       // 'compare' | 'single' | 'diff'
+let _mode = 'single';        // 'compare' | 'single' | 'diff'
 let _singleSlot = 'a';       // which sample Single mode shows
 let _diffCache = null;
 
@@ -752,5 +752,6 @@ document.addEventListener('click', e => {
 // ── Boot ──────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   _initResizer();
+  specSetMode('single');   // matches the HTML's default active button/classes
 });
 window.addEventListener('beforeunload', () => { if (_recordingSlot) stopRecording(); });

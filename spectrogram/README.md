@@ -31,10 +31,10 @@ in one of two ways:
 
 Three view modes, via the toolbar:
 
-- **🆚 Compare** (default) — Sample A and Sample B side by side.
-- **🔎 Single** — just one sample, full width (a "Sample A / Sample B" toggle
-  picks which). Reuses the same panels as Compare — no separate plots to
-  keep in sync, it's a pure layout toggle.
+- **🔎 Single** (default) — just one sample, full width (a "Sample A / Sample
+  B" toggle picks which). Reuses the same panels as Compare — no separate
+  plots to keep in sync, it's a pure layout toggle.
+- **🆚 Compare** — Sample A and Sample B side by side.
 - **⛰ Difference** — see below.
 
 FFT window size, hop size, max frequency, **frequency smoothing**, colorscale,
