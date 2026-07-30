@@ -38,6 +38,7 @@ configure('obieWebApp_spectrogram', {
         "n_fft": 2048,
         "hop": 512,
         "f_max": 8000,
+        "semitones": 0,
     },
 })
 
@@ -63,13 +64,35 @@ def _to_float32(data):
     return data.astype(np.float32)
 
 
-def _send_spectrogram(slot, channel, sig, sr, n_fft, hop, f_max):
+def _smooth_spectrogram(freqs, S_db, semitones):
+    """Fractional-octave smoothing — averages each frequency bin over a
+    ±semitones/12-octave window. Same ratio-based algorithm as Explore's
+    client-side smoothing (Web/tools/explore/explore.js: _smooth), adapted
+    here to run across every time frame of the spectrogram at once (a
+    cumulative-sum range query per bin) rather than one freq/mag curve.
+    """
+    if not semitones:
+        return S_db
+    ratio = 2.0 ** (semitones / 12.0)
+    n = len(freqs)
+    csum = np.cumsum(S_db, axis=0)
+    csum = np.vstack([np.zeros((1, S_db.shape[1])), csum])
+    out = np.empty_like(S_db)
+    for i in range(n):
+        lo = int(np.searchsorted(freqs, freqs[i] / ratio, side='left'))
+        hi = int(np.searchsorted(freqs, freqs[i] * ratio, side='right'))
+        out[i] = (csum[hi] - csum[lo]) / max(hi - lo, 1)
+    return out
+
+
+def _send_spectrogram(slot, channel, sig, sr, n_fft, hop, f_max, semitones=0):
     """Compute one slot/channel's spectrogram via the canonical module and fire a JS callback."""
     try:
         times, freqs, S_db = compute_spectrogram(sig, sr, n_fft=n_fft, hop=hop, f_max=f_max)
         if S_db.size == 0:
             js.window.onSpecError(slot, 'Signal is shorter than the FFT window — pick a smaller window size')
             return
+        S_db = _smooth_spectrogram(freqs, S_db, semitones)
         js.window.onSpecSpectrogramResult(
             slot, channel, to_js(times), to_js(freqs), to_js(S_db.flatten()),
             int(S_db.shape[0]), int(S_db.shape[1]),
@@ -78,14 +101,14 @@ def _send_spectrogram(slot, channel, sig, sr, n_fft, hop, f_max):
         js.window.onSpecError(slot, str(exc)[:160])
 
 
-def _compute_slot(slot, n_fft, hop, f_max):
+def _compute_slot(slot, n_fft, hop, f_max, semitones=0):
     st = _slots[slot]
     if st['l'] is None:
         return
     n_fft, hop, f_max = int(n_fft), int(hop), float(f_max)
-    _send_spectrogram(slot, 'l', st['l'], st['sr'], n_fft, hop, f_max)
+    _send_spectrogram(slot, 'l', st['l'], st['sr'], n_fft, hop, f_max, semitones)
     if st['r'] is not None:
-        _send_spectrogram(slot, 'r', st['r'], st['sr'], n_fft, hop, f_max)
+        _send_spectrogram(slot, 'r', st['r'], st['sr'], n_fft, hop, f_max, semitones)
 
 
 def _store_sample(slot, sr, l, r, play_samples, n_channels, info, stereo):
@@ -94,7 +117,7 @@ def _store_sample(slot, sr, l, r, play_samples, n_channels, info, stereo):
     _slots[slot]['r']  = r
     js.window.onSpecSampleResult(slot, to_js(play_samples), sr, n_channels, info, stereo)
     prefs = cfg_load('settings')
-    _compute_slot(slot, prefs['n_fft'], prefs['hop'], prefs['f_max'])
+    _compute_slot(slot, prefs['n_fft'], prefs['hop'], prefs['f_max'], prefs.get('semitones', 0))
 
 
 # ── WAV loading ──────────────────────────────────────────────────────────
@@ -246,12 +269,14 @@ js.window.pySpecFinalizeRecording = create_proxy(_finalize_recording)
 # *previous* sample here would flash stale data over the live preview, so we
 # skip it and just persist the new settings.
 
-def _recompute(n_fft_js, hop_js, fmax_js):
-    cfg_save('settings', {'n_fft': int(n_fft_js), 'hop': int(hop_js), 'f_max': float(fmax_js)})
+def _recompute(n_fft_js, hop_js, fmax_js, semitones_js=0):
+    semitones = float(semitones_js)
+    cfg_save('settings', {'n_fft': int(n_fft_js), 'hop': int(hop_js),
+                           'f_max': float(fmax_js), 'semitones': semitones})
     for slot in _slots:
         if _mic_slot == slot and _mic_buf is not None:
             continue
-        _compute_slot(slot, n_fft_js, hop_js, fmax_js)
+        _compute_slot(slot, n_fft_js, hop_js, fmax_js, semitones)
 
 
 js.window.pySpecRecompute = create_proxy(_recompute)
@@ -309,7 +334,7 @@ def _mic_push(samples_js):
         window = _mic_buf[-_mic_filled:] if _mic_filled < _mic_size else _mic_buf
         prefs = cfg_load('settings')
         _send_spectrogram(_mic_slot, 'l', window, _mic_sr, int(prefs['n_fft']),
-                           int(prefs['hop']), float(prefs['f_max']))
+                           int(prefs['hop']), float(prefs['f_max']), prefs.get('semitones', 0))
     except Exception as exc:
         js.window.onSpecError(_mic_slot or 'a', str(exc)[:160])
 
@@ -346,18 +371,20 @@ def _interp_grid_to(freqs_b, times_b, S_db_b, freqs_a, times_a):
     return by_time
 
 
-def _compute_diff(n_fft_js, hop_js, fmax_js):
+def _compute_diff(n_fft_js, hop_js, fmax_js, semitones_js=0):
     a, b = _slots['a'], _slots['b']
     if a['l'] is None or b['l'] is None:
         js.window.onSpecDiffError('load or record both Sample A and Sample B first')
         return
-    n_fft, hop, f_max = int(n_fft_js), int(hop_js), float(fmax_js)
+    n_fft, hop, f_max, semitones = int(n_fft_js), int(hop_js), float(fmax_js), float(semitones_js)
     try:
         times_a, freqs_a, S_a = compute_spectrogram(a['l'], a['sr'], n_fft=n_fft, hop=hop, f_max=f_max)
         times_b, freqs_b, S_b = compute_spectrogram(b['l'], b['sr'], n_fft=n_fft, hop=hop, f_max=f_max)
         if S_a.size == 0 or S_b.size == 0:
             js.window.onSpecDiffError('a signal is shorter than the FFT window — pick a smaller window size')
             return
+        S_a = _smooth_spectrogram(freqs_a, S_a, semitones)
+        S_b = _smooth_spectrogram(freqs_b, S_b, semitones)
         S_b_aligned = _interp_grid_to(freqs_b, times_b, S_b, freqs_a, times_a)
         diff = (S_a - S_b_aligned).astype(np.float32)
         js.window.onSpecDiffResult(

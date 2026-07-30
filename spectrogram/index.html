@@ -49,6 +49,8 @@
       <button id="mode-diff-btn" class="tb-btn" onclick="specSetMode('diff')" title="Show the intensity difference A − B as one plot">⛰ Difference</button>
     </div>
     <div class="tb-flex"></div>
+    <button id="mirror-axis-btn" class="tb-btn" onclick="specToggleMirrorAxis()" style="display:none"
+            title="Toggle which axis Sample A and Sample B share in Mirror view">Mirror: Frequency</button>
     <button id="freq-scale-btn" class="tb-btn" onclick="specToggleFreqScale()"
             title="Toggle spectrogram frequency axis between linear and log">Freq: Lin</button>
     <button class="tb-btn" onclick="specPreferences()">Settings</button>
@@ -87,6 +89,19 @@
           <span class="sp-unit">Hz</span>
         </div>
         <div class="sp-row">
+          <label for="semitone-sel">Smoothing</label>
+          <select id="semitone-sel" onchange="specSettingsChanged()">
+            <option value="0" selected>No smoothing</option>
+            <option value="0.25">¼ semitone</option>
+            <option value="0.5">½ semitone</option>
+            <option value="1">1 semitone</option>
+            <option value="2">2 semitones</option>
+            <option value="3">3 semitones</option>
+            <option value="4">4 semitones</option>
+            <option value="12">Octave</option>
+          </select>
+        </div>
+        <div class="sp-row">
           <label for="colorscale-sel">Colorscale</label>
           <select id="colorscale-sel" onchange="specRenderAll()">
             <option value="Plasma" selected>Plasma</option>
@@ -108,15 +123,16 @@
             <option value="heatmap" selected>Heatmap</option>
             <option value="surface">3D Surface</option>
             <option value="waterfall">Waterfall</option>
+            <option value="mirror" title="Difference view only">Mirror (A | B)</option>
           </select>
         </div>
-        <p class="sp-hint" style="margin:0">Applies to Sample A, Sample B, and the Difference view.</p>
+        <p class="sp-hint" style="margin:0">Applies to Sample A, Sample B, and the Difference view. Mirror only applies in Difference mode.</p>
       </div>
 
       <div class="sp-sect">ℹ How to compare</div>
       <div class="sp-content">
         <p class="sp-hint" style="margin:0 0 6px">Load a file or record from the mic into <strong>Sample A</strong> and <strong>Sample B</strong> below — only one mic recording can run at a time.</p>
-        <p class="sp-hint" style="margin:0">Switch to <strong>⛰ Difference</strong> above to see Sample A's intensity minus Sample B's, as one plot — 3D Surface makes the peaks and dips easiest to read.</p>
+        <p class="sp-hint" style="margin:0">Switch to <strong>⛰ Difference</strong> above to see Sample A's intensity minus Sample B's, as one plot — 3D Surface makes the peaks and dips easiest to read. <strong>Mirror</strong> instead shows A and B side by side around a center line, without subtracting them.</p>
       </div>
     </div><!-- sp-sidebar -->
 

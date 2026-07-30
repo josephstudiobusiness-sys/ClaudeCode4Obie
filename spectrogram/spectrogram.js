@@ -165,9 +165,18 @@ function _waterfallTraces(freqs, times, zT, isDiff) {
 }
 
 function _renderGrid(divId, cache, title, isDiff) {
+  let mode = document.getElementById('view-mode-sel').value;
+
+  // Mirror is a Difference-only view (it juxtaposes Sample A and Sample B
+  // directly rather than plotting a single grid) — a lone Sample A/B panel
+  // has nothing to mirror against, so it falls back to Heatmap.
+  if (mode === 'mirror') {
+    if (isDiff) { _renderMirror(divId, title); return; }
+    mode = 'heatmap';
+  }
+
   const { times, freqs, zDb } = cache;
   const zT = _transpose(zDb);   // (nTimes rows × nFreqs cols)
-  const mode = document.getElementById('view-mode-sel').value;
   const colorscale = isDiff ? 'RdBu' : document.getElementById('colorscale-sel').value;
 
   const zLabel = isDiff ? 'ΔdB' : 'Level';
@@ -211,17 +220,119 @@ function _renderGrid(divId, cache, title, isDiff) {
   }
 }
 
-// The A-red/B-blue legend only applies to Heatmap/3D Surface, where colour
-// encodes the sign of the difference. Waterfall colours lines by time
-// instead (see _waterfallTraces), so the legend would be misleading there.
+// ── Mirror view: Sample A on the left, Sample B on the right ───────────
+// Unlike Heatmap/Surface/Waterfall, Mirror doesn't subtract A from B — it
+// shows each sample's own spectrogram directly, split around a centre line,
+// so you compare shapes visually rather than reading a computed difference.
+// Two sub-styles, toggled via the "Mirror: …" toolbar button:
+//   'freq' (default) — shared frequency axis (Y), like a population pyramid:
+//       time is collapsed to a mean-dB-per-bin spectrum for each sample.
+//   'time' — shared time axis (Y), each side a full heatmap with frequency
+//       (X) increasing outward from the centre line.
+let _mirrorAxis = 'freq';   // 'freq' | 'time'
+const MIRROR_COLOR_A = '#b2182b';   // matches the A-louder/B-louder legend swatches
+const MIRROR_COLOR_B = '#2166ac';
+
+function _avgSpectrum(cache) {
+  // Mean dB per frequency bin across all time frames — a display-only
+  // approximation (a true average would mean over linear power, not dB);
+  // fine for "which regions run hotter," not for precise level readings.
+  return cache.zDb.map(row => row.reduce((s, v) => s + v, 0) / (row.length || 1));
+}
+
+function _renderMirrorByFreq(divId, title, aCache, bCache) {
+  const freqsA = aCache.freqs, freqsB = bCache.freqs;
+  const avgA = _avgSpectrum(aCache), avgB = _avgSpectrum(bCache);
+  const floor = Math.min(Math.min(...avgA), Math.min(...avgB));
+  const extentA = avgA.map(v => -(v - floor));   // negative → extends left
+  const extentB = avgB.map(v => v - floor);      // positive → extends right
+  const fMin = Math.min(freqsA[0], freqsB[0]), fMax = Math.max(freqsA.at(-1), freqsB.at(-1));
+
+  Plotly.react(divId, [
+    { x: extentA, y: freqsA, customdata: avgA, type: 'scatter', mode: 'lines', fill: 'tozerox',
+      fillcolor: MIRROR_COLOR_A + '55', line: { color: MIRROR_COLOR_A, width: 1 },
+      name: 'Sample A', hovertemplate: 'Sample A<br>Freq: %{y:.0f} Hz<br>Level: %{customdata:.1f} dB<extra></extra>' },
+    { x: extentB, y: freqsB, customdata: avgB, type: 'scatter', mode: 'lines', fill: 'tozerox',
+      fillcolor: MIRROR_COLOR_B + '55', line: { color: MIRROR_COLOR_B, width: 1 },
+      name: 'Sample B', hovertemplate: 'Sample B<br>Freq: %{y:.0f} Hz<br>Level: %{customdata:.1f} dB<extra></extra>' },
+  ], _wl(title, '← Sample A · Sample B →', 'Frequency (Hz)', {
+    margin: { l: 55, r: 20, t: 26, b: 34 },
+    xaxis: { showticklabels: false, zeroline: true, zerolinewidth: 1, zerolinecolor: cssVar('--border') },
+    yaxis: { type: _logFreq ? 'log' : 'linear', range: _logFreq ? undefined : [fMin, fMax] },
+    showlegend: false,
+  }), _pcfg);
+}
+
+function _renderMirrorByTime(divId, title, aCache, bCache) {
+  const zA = _transpose(aCache.zDb), zB = _transpose(bCache.zDb);
+  const custA = zA.map(() => aCache.freqs), custB = zB.map(() => bCache.freqs);
+  const colorscale = document.getElementById('colorscale-sel').value;
+  const fMax = Math.max(aCache.freqs.at(-1), bCache.freqs.at(-1));
+
+  Plotly.react(divId, [
+    { x: aCache.freqs.map(f => -f), y: aCache.times, z: zA, customdata: custA,
+      type: 'heatmap', colorscale, showscale: false, zsmooth: 'fast',
+      hovertemplate: 'Sample A<br>Freq: %{customdata:.0f} Hz<br>Time: %{y:.3f} s<br>Level: %{z:.1f} dB<extra></extra>' },
+    { x: bCache.freqs, y: bCache.times, z: zB, customdata: custB,
+      type: 'heatmap', colorscale, showscale: true,
+      colorbar: { title: 'dB', titleside: 'right', thickness: 10, len: 0.95, tickfont: { size: 9 } }, zsmooth: 'fast',
+      hovertemplate: 'Sample B<br>Freq: %{customdata:.0f} Hz<br>Time: %{y:.3f} s<br>Level: %{z:.1f} dB<extra></extra>' },
+  ], _wl(title, '← Sample A · Frequency (Hz) · Sample B →', 'Time (s)', {
+    margin: { l: 50, r: 45, t: 26, b: 34 },
+    // Log scale is undefined for negative X (Sample A's mirrored side), so
+    // this sub-view is linear-only regardless of the Freq: Lin/Log toggle.
+    xaxis: { range: [-fMax, fMax], zeroline: true, zerolinewidth: 1, zerolinecolor: cssVar('--border') },
+  }), _pcfg);
+}
+
+function _renderMirror(divId, title) {
+  const a = slots.a, b = slots.b;
+  if (!a.lCache || !b.lCache) {
+    Plotly.react(divId, [], _wl(title, '', '', {}), _pcfg);
+    return;
+  }
+  if (_mirrorAxis === 'freq') _renderMirrorByFreq(divId, title, a.lCache, b.lCache);
+  else _renderMirrorByTime(divId, title, a.lCache, b.lCache);
+}
+
+window.specToggleMirrorAxis = function() {
+  _mirrorAxis = _mirrorAxis === 'freq' ? 'time' : 'freq';
+  document.getElementById('mirror-axis-btn').textContent =
+    _mirrorAxis === 'freq' ? 'Mirror: Frequency' : 'Mirror: Time';
+  _updateDiffLegend();
+  if (_mode === 'diff') _renderMirror('diff-plot', 'Difference: Sample A − Sample B');
+};
+
+// The mirror-axis toggle only makes sense in Difference mode with Mirror
+// selected — hidden otherwise so it doesn't sit around doing nothing.
+function _updateMirrorAxisBtn() {
+  const btn = document.getElementById('mirror-axis-btn');
+  const show = _mode === 'diff' && document.getElementById('view-mode-sel').value === 'mirror';
+  btn.style.display = show ? '' : 'none';
+}
+
+// The A-red/B-blue legend applies to Heatmap/3D Surface (colour encodes the
+// sign of A−B) and Mirror-by-frequency (A's fill/line is literally drawn in
+// the same red, B's in the same blue). It's hidden for Waterfall (colour
+// means time there) and Mirror-by-time (heatmaps use the selected sequential
+// colorscale, not red/blue).
 function _updateDiffLegend() {
   const legend = document.getElementById('diff-legend');
   const mode = document.getElementById('view-mode-sel').value;
-  legend.style.display = mode === 'waterfall' ? 'none' : '';
+  const hide = mode === 'waterfall' || (mode === 'mirror' && _mirrorAxis === 'time');
+  legend.style.display = hide ? 'none' : '';
 }
 
 window.specViewModeChanged = function() {
   _updateDiffLegend();
+  _updateMirrorAxisBtn();
+  // Mirror doesn't need the interpolated diff grid — it renders straight
+  // from Sample A/B's own already-computed spectrograms — so only fetch a
+  // fresh diff when switching to a non-Mirror view that doesn't have one yet.
+  if (_mode === 'diff' && document.getElementById('view-mode-sel').value !== 'mirror' && !_diffCache) {
+    _requestDiff();
+    return;
+  }
   specRenderAll();
 };
 
@@ -257,15 +368,29 @@ function specSettingsChanged() {
     document.getElementById('hop-sel').value = String(hop);
   }
   const fMax = +document.getElementById('fmax-inp').value;
+  const semitones = +document.getElementById('semitone-sel').value;
   if (!window.pySpecRecompute) return;
-  window.pySpecRecompute(nFft, hop, fMax);
-  if (_mode === 'diff') _requestDiff();
+  window.pySpecRecompute(nFft, hop, fMax, semitones);
+  if (_mode === 'diff') {
+    // Mirror doesn't use the interpolated diff grid — it reads Sample A/B's
+    // own spectrograms directly, which pySpecRecompute above just refreshed.
+    if (document.getElementById('view-mode-sel').value === 'mirror') {
+      _renderMirror('diff-plot', 'Difference: Sample A − Sample B');
+    } else {
+      _requestDiff();
+    }
+  }
 }
 
 function specRenderAll() {
   renderSpec('a');
   renderSpec('b');
-  if (_diffCache && _mode === 'diff') _renderGrid('diff-plot', _diffCache, 'Difference: Sample A − Sample B', true);
+  if (_mode !== 'diff') return;
+  if (document.getElementById('view-mode-sel').value === 'mirror') {
+    _renderMirror('diff-plot', 'Difference: Sample A − Sample B');
+  } else if (_diffCache) {
+    _renderGrid('diff-plot', _diffCache, 'Difference: Sample A − Sample B', true);
+  }
 }
 
 function updateChanBtn(slot) {
@@ -301,9 +426,18 @@ window.specSetMode = function(mode) {
   document.getElementById('mode-diff-btn').classList.toggle('active', mode === 'diff');
   document.getElementById('compare-view').style.display = mode === 'compare' ? '' : 'none';
   document.getElementById('diff-view').style.display = mode === 'diff' ? '' : 'none';
+  _updateMirrorAxisBtn();
   if (mode === 'diff') {
     _updateDiffLegend();
-    _requestDiff();
+    if (document.getElementById('view-mode-sel').value === 'mirror') {
+      _renderMirror('diff-plot', 'Difference: Sample A − Sample B');
+    } else {
+      _requestDiff();
+    }
+    // diff-view was just unhidden — its container had no measurable size
+    // while display:none, so the plot just drawn needs an explicit resize.
+    const el = document.getElementById('diff-plot');
+    if (el) setTimeout(() => Plotly.Plots.resize(el), 0);
   } else {
     ['waveform-plot-a', 'spec-plot-a', 'waveform-plot-b', 'spec-plot-b'].forEach(id => {
       const el = document.getElementById(id); if (el) Plotly.Plots.resize(el);
@@ -322,10 +456,11 @@ function _requestDiff() {
   const nFft = +document.getElementById('n-fft-sel').value;
   const hop  = +document.getElementById('hop-sel').value;
   const fMax = +document.getElementById('fmax-inp').value;
+  const semitones = +document.getElementById('semitone-sel').value;
   const el = document.getElementById('diff-status');
   el.textContent = 'computing…';
   el.className = 'sp-panel-status';
-  window.pySpecComputeDiff(nFft, hop, fMax);
+  window.pySpecComputeDiff(nFft, hop, fMax, semitones);
 }
 
 window.onSpecDiffResult = function(times_js, freqs_js, flatZ_js, nFreqs, nTimes) {
@@ -482,6 +617,7 @@ window.specResetPrefs = function() {
   document.getElementById('n-fft-sel').value = '2048';
   document.getElementById('hop-sel').value = '512';
   document.getElementById('fmax-inp').value = '8000';
+  document.getElementById('semitone-sel').value = '0';
   document.getElementById('colorscale-sel').value = 'Plasma';
   specSettingsChanged();
   specRenderAll();
@@ -513,6 +649,7 @@ window.onPythonReady = function() {
     if (s.n_fft) document.getElementById('n-fft-sel').value = String(s.n_fft);
     if (s.hop)   document.getElementById('hop-sel').value   = String(s.hop);
     if (s.f_max) document.getElementById('fmax-inp').value  = String(s.f_max);
+    if (s.semitones) document.getElementById('semitone-sel').value = String(s.semitones);
   }
 };
 

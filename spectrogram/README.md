@@ -23,9 +23,20 @@ one of two ways:
   record at a time (one physical microphone) — the other side's Record
   button is disabled meanwhile.
 
-FFT window size, hop size, max frequency, colorscale, and the frequency-axis
-scale are all adjustable in the sidebar and apply to **both** samples, so the
-comparison is apples-to-apples.
+FFT window size, hop size, max frequency, **frequency smoothing**, colorscale,
+and the frequency-axis scale are all adjustable in the sidebar and apply to
+**both** samples, so the comparison is apples-to-apples.
+
+### Frequency smoothing
+
+The **Smoothing** dropdown (¼ semitone up to a full octave) averages each
+frequency bin over a ± fractional-octave window, exactly like Explore's
+smoothing control — same ratio-based algorithm (`freqs[i]/ratio` to
+`freqs[i]*ratio`, `ratio = 2^(semitones/12)`), just adapted to run across an
+entire spectrogram matrix (every time frame) at once via a cumulative-sum
+range query per bin, rather than one freq/mag curve at a time. Applies
+everywhere: Sample A, Sample B, and the Difference view (smoothed *before*
+subtracting, so the diff doesn't inherit narrow-band noise from either side).
 
 ### View modes
 
@@ -40,6 +51,19 @@ Sample A, Sample B, or the Difference view:
   (X=frequency, Y=dB) per time slice, stacked with a vertical offset so
   later slices sit above earlier ones (decimated to ~30 slices for
   readability), colour-graded early→late.
+- **Mirror (A | B)** — *Difference view only.* Rather than subtracting A
+  from B, this shows both samples' own spectrograms side by side around a
+  centre line, so you compare shapes directly instead of reading a computed
+  difference. A **Mirror: Frequency / Time** toolbar button (visible only in
+  this mode) toggles which axis is shared:
+  - **Frequency** (default) — a population-pyramid-style plot: Y=frequency
+    (shared), and for each bin a filled line extends left for Sample A's
+    time-averaged level, right for Sample B's (red/blue, matching the
+    Difference legend). Time is collapsed to a mean.
+  - **Time** — Y=time (shared), and each side is a full heatmap with
+    frequency (X) increasing outward from the centre line — Sample A
+    mirrored on the left, Sample B normal on the right. (Linear frequency
+    axis only here — log is undefined for the negative/mirrored side.)
 
 ### Difference mode
 
@@ -48,10 +72,13 @@ Sample B's as one plot — peaks where A is louder than B, valleys where B is
 louder, using a zero-centred diverging colorscale (RdBu, reversed so
 **red = A louder, blue = B louder**) so it reads as "mountains and valleys"
 rather than raw dB. A colour key showing this appears next to the plot title
-in Heatmap and 3D Surface (the two modes where colour encodes A-vs-B) — it's
-hidden in Waterfall mode, where colour instead encodes time. 3D Surface is
+in Heatmap, 3D Surface, and Mirror-by-frequency (the modes where colour/fill
+encodes A-vs-B) — it's hidden in Waterfall and Mirror-by-time, where colour
+instead encodes time or the selected sequential colorscale. 3D Surface is
 the most literal read on the "mountains and valleys." If A and B differ in
-sample rate or length, B is resampled onto A's frequency/time grid first.
+sample rate or length, B is resampled onto A's frequency/time grid first
+(Heatmap/Surface/Waterfall only — Mirror doesn't need this, since it never
+subtracts the two).
 
 All signal processing is delegated to the canonical ObieApp Python modules,
 loaded live from GitHub at runtime — none of it is reimplemented here (see
@@ -61,6 +88,12 @@ loaded live from GitHub at runtime — none of it is reimplemented here (see
 - [`Python/fileio/trf_fileio.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/fileio/trf_fileio.py), [`avc_fileio.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/fileio/avc_fileio.py), [`tsv_fileio.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/fileio/tsv_fileio.py), [`mat_fileio.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/fileio/mat_fileio.py) — FRF file parsing
 - [`Python/processing/convolution.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/processing/convolution.py) — `_frf_to_ir` / `_minimum_phase` (FRF → impulse response), the same helpers Convolve uses internally
 - [`Python/processing/spectrogram.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/processing/spectrogram.py) — the STFT itself, used for files, each live-mic update, and both sides of the Difference view
+
+Frequency smoothing is the one exception — there's no canonical Python module
+for it in ObieApp (checked before writing anything). Explore implements it
+client-side in JS ([`explore.js`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Web/tools/explore/explore.js), `_smooth()`), so `main.py` reuses that
+same ratio-window algorithm rather than inventing a different one, adapted to
+run across a whole spectrogram matrix via numpy.
 
 The mic capture path (`AudioWorkletNode` → batched samples → a Python rolling
 buffer for the live preview, plus the full clip kept client-side for the
