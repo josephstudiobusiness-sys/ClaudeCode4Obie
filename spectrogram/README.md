@@ -25,8 +25,30 @@ one of two ways:
 
 FFT window size, hop size, max frequency, colorscale, and the frequency-axis
 scale are all adjustable in the sidebar and apply to **both** samples, so the
-comparison is apples-to-apples. The spectrogram axes run frequency (x) ×
-time (y).
+comparison is apples-to-apples.
+
+### View modes
+
+A **Plot type** selector (sidebar) switches how any spectrogram is drawn —
+Sample A, Sample B, or the Difference view:
+
+- **Heatmap** (default) — X=frequency, Y=time, colour=dB.
+- **3D Surface** — X=frequency, Y=time, Z=dB as actual height, matching how
+  an FRF plot puts dB on a real axis rather than encoding it as colour.
+  Rotatable/zoomable.
+- **Waterfall** — the classic acoustics cascade plot: one FRF-style line
+  (X=frequency, Y=dB) per time slice, stacked with a vertical offset so
+  later slices sit above earlier ones (decimated to ~30 slices for
+  readability), colour-graded early→late.
+
+### Difference mode
+
+Toggle **⛰ Difference** (top toolbar) to see Sample A's spectrogram minus
+Sample B's as one plot — peaks where A is louder than B, valleys where B is
+louder, using a zero-centred diverging colorscale (RdBu) so it reads as
+"mountains and valleys" rather than raw dB. 3D Surface is the most literal
+read on this; Heatmap and Waterfall work too. If A and B differ in sample
+rate or length, B is resampled onto A's frequency/time grid first.
 
 All signal processing is delegated to the canonical ObieApp Python modules,
 loaded live from GitHub at runtime — none of it is reimplemented here (see
@@ -35,7 +57,7 @@ loaded live from GitHub at runtime — none of it is reimplemented here (see
 - [`Python/fileio/wavfileio.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/fileio/wavfileio.py) — WAV decoding
 - [`Python/fileio/trf_fileio.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/fileio/trf_fileio.py), [`avc_fileio.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/fileio/avc_fileio.py), [`tsv_fileio.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/fileio/tsv_fileio.py), [`mat_fileio.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/fileio/mat_fileio.py) — FRF file parsing
 - [`Python/processing/convolution.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/processing/convolution.py) — `_frf_to_ir` / `_minimum_phase` (FRF → impulse response), the same helpers Convolve uses internally
-- [`Python/processing/spectrogram.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/processing/spectrogram.py) — the STFT itself, used for files and for each live-mic update
+- [`Python/processing/spectrogram.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/processing/spectrogram.py) — the STFT itself, used for files, each live-mic update, and both sides of the Difference view
 
 The mic capture path (`AudioWorkletNode` → batched samples → a Python rolling
 buffer for the live preview, plus the full clip kept client-side for the

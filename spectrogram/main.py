@@ -8,6 +8,8 @@ Python-side responsibilities:
                                             (_frf_to_ir, _minimum_phase)
   - Compute the STFT spectrogram         → Python/processing/spectrogram.py
   - Roll a live-mic ring buffer and recompute its spectrogram on each push
+  - Diff two slots' spectrograms (Sample A − Sample B), resampled onto a
+    shared grid, for the "Difference" view
 
 There are two independent "slots" ('a' and 'b') so two samples — each loaded
 from a file or recorded from the mic — can be compared side by side. Both
@@ -323,6 +325,50 @@ def _mic_stop():
 js.window.pySpecMicStart = create_proxy(_mic_start)
 js.window.pySpecMicPush  = create_proxy(_mic_push)
 js.window.pySpecMicStop  = create_proxy(_mic_stop)
+
+
+# ── Difference view — Sample A's spectrogram minus Sample B's ──────────────
+# Both slots share FFT settings, but can differ in sample rate and/or clip
+# length (their frequency bins and time frames won't line up 1:1), so B is
+# resampled onto A's (frequency, time) grid via linear interpolation before
+# subtracting — same idea as a "regrid then diff" step, just done with
+# np.interp rather than a heavier 2-D interpolator (fine for a display-only
+# diff; edges of B outside A's coverage hold at B's boundary value).
+
+def _interp_grid_to(freqs_b, times_b, S_db_b, freqs_a, times_a):
+    """Resample S_db_b (n_freqs_b × n_times_b) onto the (freqs_a, times_a) grid."""
+    by_freq = np.empty((len(freqs_a), S_db_b.shape[1]))
+    for j in range(S_db_b.shape[1]):
+        by_freq[:, j] = np.interp(freqs_a, freqs_b, S_db_b[:, j])
+    by_time = np.empty((len(freqs_a), len(times_a)))
+    for i in range(len(freqs_a)):
+        by_time[i, :] = np.interp(times_a, times_b, by_freq[i, :])
+    return by_time
+
+
+def _compute_diff(n_fft_js, hop_js, fmax_js):
+    a, b = _slots['a'], _slots['b']
+    if a['l'] is None or b['l'] is None:
+        js.window.onSpecDiffError('load or record both Sample A and Sample B first')
+        return
+    n_fft, hop, f_max = int(n_fft_js), int(hop_js), float(fmax_js)
+    try:
+        times_a, freqs_a, S_a = compute_spectrogram(a['l'], a['sr'], n_fft=n_fft, hop=hop, f_max=f_max)
+        times_b, freqs_b, S_b = compute_spectrogram(b['l'], b['sr'], n_fft=n_fft, hop=hop, f_max=f_max)
+        if S_a.size == 0 or S_b.size == 0:
+            js.window.onSpecDiffError('a signal is shorter than the FFT window — pick a smaller window size')
+            return
+        S_b_aligned = _interp_grid_to(freqs_b, times_b, S_b, freqs_a, times_a)
+        diff = (S_a - S_b_aligned).astype(np.float32)
+        js.window.onSpecDiffResult(
+            to_js(times_a), to_js(freqs_a), to_js(diff.flatten()),
+            int(diff.shape[0]), int(diff.shape[1]),
+        )
+    except Exception as exc:
+        js.window.onSpecDiffError(str(exc)[:160])
+
+
+js.window.pySpecComputeDiff = create_proxy(_compute_diff)
 
 js.window.obieSpecSettings = js.JSON.parse(json.dumps(cfg_load('settings')))
 

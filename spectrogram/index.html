@@ -44,7 +44,10 @@
 
   <!-- ── Toolbar (applies to both samples) ──────────────────────────── -->
   <div class="sp-toolbar">
-    <span class="sp-toolbar-lbl">Compare two samples side by side —</span>
+    <div class="tb-group">
+      <button id="mode-compare-btn" class="tb-btn active" onclick="specSetMode('compare')" title="Show Sample A and Sample B side by side">🆚 Compare</button>
+      <button id="mode-diff-btn" class="tb-btn" onclick="specSetMode('diff')" title="Show the intensity difference A − B as one plot">⛰ Difference</button>
+    </div>
     <div class="tb-flex"></div>
     <button id="freq-scale-btn" class="tb-btn" onclick="specToggleFreqScale()"
             title="Toggle spectrogram frequency axis between linear and log">Freq: Lin</button>
@@ -91,14 +94,29 @@
             <option value="Inferno">Inferno</option>
             <option value="Jet">Jet</option>
             <option value="Greys">Greyscale</option>
+            <option value="RdBu">RdBu (diverging — best for Difference)</option>
           </select>
         </div>
         <p class="sp-hint">Higher window size = finer frequency resolution, coarser time resolution. Settings apply to both samples so the comparison is apples-to-apples.</p>
       </div>
 
+      <div class="sp-sect">📈 View</div>
+      <div class="sp-content">
+        <div class="sp-row">
+          <label for="view-mode-sel">Plot type</label>
+          <select id="view-mode-sel" onchange="specViewModeChanged()">
+            <option value="heatmap" selected>Heatmap</option>
+            <option value="surface">3D Surface</option>
+            <option value="waterfall">Waterfall</option>
+          </select>
+        </div>
+        <p class="sp-hint" style="margin:0">Applies to Sample A, Sample B, and the Difference view.</p>
+      </div>
+
       <div class="sp-sect">ℹ How to compare</div>
       <div class="sp-content">
-        <p class="sp-hint" style="margin:0">Load a file or record from the mic into <strong>Sample A</strong> and <strong>Sample B</strong> below — only one mic recording can run at a time.</p>
+        <p class="sp-hint" style="margin:0 0 6px">Load a file or record from the mic into <strong>Sample A</strong> and <strong>Sample B</strong> below — only one mic recording can run at a time.</p>
+        <p class="sp-hint" style="margin:0">Switch to <strong>⛰ Difference</strong> above to see Sample A's intensity minus Sample B's, as one plot — 3D Surface makes the peaks and dips easiest to read.</p>
       </div>
     </div><!-- sp-sidebar -->
 
@@ -106,7 +124,7 @@
     <div id="sp-resizer" class="sp-resizer"></div>
 
     <!-- Right: two side-by-side comparison panels -->
-    <div class="sp-compare">
+    <div class="sp-compare" id="compare-view">
 
       <!-- ── Sample A ──────────────────────────────────────────────── -->
       <div class="sp-panel" data-slot="a">
@@ -159,6 +177,18 @@
       </div>
 
     </div><!-- sp-compare -->
+
+    <!-- Full-width difference view — hidden until "⛰ Difference" mode is selected -->
+    <div class="sp-diffview" id="diff-view" style="display:none">
+      <div class="sp-panel-toolbar">
+        <span class="sp-panel-title">Difference: Sample A − Sample B</span>
+        <div class="tb-flex"></div>
+        <span class="sp-panel-status" id="diff-status">load or record both samples first</span>
+      </div>
+      <div class="sp-plot-row" style="flex:1">
+        <div id="diff-plot" class="plot-div"></div>
+      </div>
+    </div>
 
   </div><!-- sp-body -->
 

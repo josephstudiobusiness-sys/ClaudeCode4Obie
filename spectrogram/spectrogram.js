@@ -38,6 +38,7 @@ const _wl = (title, xl, yl, extra) => ({
   Plotly.newPlot(`waveform-plot-${slot}`, [], _wl('Waveform', 'Time (s)', 'Amplitude'), _pcfg);
   Plotly.newPlot(`spec-plot-${slot}`,     [], _wl('Spectrogram', 'Frequency (Hz)', 'Time (s)'), _pcfg);
 });
+Plotly.newPlot('diff-plot', [], _wl('Difference: Sample A − Sample B', 'Frequency (Hz)', 'Time (s)'), _pcfg);
 
 // ── File loading (WAV, or FRF files IFFT'd to an impulse response) ────
 function loadFile(slot, input) {
@@ -71,6 +72,7 @@ window.onSpecSampleResult = function(slot, samplesArr, sr, nChannels, info, ster
   document.getElementById(`chan-btn-${slot}`).style.display = s.isStereo ? '' : 'none';
   updateChanBtn(slot);
   plotWaveform(slot);
+  if (_mode === 'diff') _requestDiff();
 };
 
 window.onSpecSampleError = function(slot, msg) {
@@ -117,21 +119,88 @@ function renderSpec(slot) {
   const s = slots[slot];
   const cache = s.showChannel === 'r' ? s.rCache : s.lCache;
   if (!cache) return;
-  const { times, freqs, zDb } = cache;
-  const colorscale = document.getElementById('colorscale-sel').value;
   const label = _recordingSlot === slot ? ' · Live'
     : s.isStereo ? (s.showChannel === 'r' ? ' · R channel' : ' · L channel') : '';
-  Plotly.react(`spec-plot-${slot}`, [{
-    x: freqs, y: times, z: _transpose(zDb),
-    type: 'heatmap', colorscale, showscale: true,
-    colorbar: { title: 'dB', titleside: 'right', thickness: 10, len: 0.95, tickfont: { size: 9 } },
-    zsmooth: 'fast', hoverinfo: 'skip',
-  }], _wl('Spectrogram' + label, 'Frequency (Hz)', 'Time (s)', {
-    margin: { l: 50, r: 45, t: 26, b: 34 },
-    xaxis: { type: _logFreq ? 'log' : 'linear' },
-  }), _pcfg);
-  renderFrameInfo(slot, times, freqs);
+  _renderGrid(`spec-plot-${slot}`, cache, 'Spectrogram' + label, false);
+  renderFrameInfo(slot, cache.times, cache.freqs);
 }
+
+// ── Multi-view rendering: heatmap / 3D surface / waterfall ─────────────
+// Shared by Sample A, Sample B, and the Difference view — `isDiff` selects
+// a diverging, zero-centred colour range so peaks/dips read as +/- dB.
+function _maxAbs(zT) {
+  let m = 0;
+  for (const row of zT) for (const v of row) if (Number.isFinite(v)) m = Math.max(m, Math.abs(v));
+  return m || 1;
+}
+
+function _waterfallTraces(freqs, times, zT) {
+  const nT = zT.length;   // time frames (rows, after transpose)
+  const maxSlices = 30;
+  const step = Math.max(1, Math.round(nT / maxSlices));
+  let lo = Infinity, hi = -Infinity;
+  for (const row of zT) for (const v of row) if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  const range = (hi - lo) || 1;
+  const nSlicesShown = Math.ceil(nT / step);
+  const offsetStep = Math.max(2, range / Math.max(1, nSlicesShown - 1) * 0.6);
+  const traces = [];
+  let idx = 0;
+  for (let t = 0; t < nT; t += step) {
+    const hue = 250 - (idx / Math.max(1, nSlicesShown - 1)) * 250;   // blue (early) → red (late)
+    traces.push({
+      x: freqs, y: zT[t].map(v => v + idx * offsetStep),
+      type: 'scatter', mode: 'lines',
+      line: { color: `hsl(${hue},70%,45%)`, width: 1 },
+      name: `t=${times[t].toFixed(2)}s`, hoverinfo: 'name', showlegend: false,
+    });
+    idx++;
+  }
+  return traces;
+}
+
+function _renderGrid(divId, cache, title, isDiff) {
+  const { times, freqs, zDb } = cache;
+  const zT = _transpose(zDb);   // (nTimes rows × nFreqs cols)
+  const mode = document.getElementById('view-mode-sel').value;
+  const colorscale = isDiff ? 'RdBu' : document.getElementById('colorscale-sel').value;
+
+  if (mode === 'surface') {
+    const trace = { x: freqs, y: times, z: zT, type: 'surface', colorscale, showscale: true,
+      colorbar: { title: isDiff ? 'ΔdB' : 'dB', titleside: 'right', thickness: 10, tickfont: { size: 9 } } };
+    if (isDiff) { const m = _maxAbs(zT); trace.cmin = -m; trace.cmax = m; }
+    Plotly.react(divId, [trace], {
+      title: { text: title, font: { size: 11 }, pad: { t: 2, b: 0 } },
+      font: { size: 10, family: 'inherit' },
+      paper_bgcolor: '#fff',
+      scene: {
+        xaxis: { title: 'Frequency (Hz)', type: _logFreq ? 'log' : 'linear' },
+        yaxis: { title: 'Time (s)' },
+        zaxis: { title: isDiff ? 'ΔdB' : 'dB' },
+      },
+      margin: { l: 0, r: 0, t: 28, b: 0 },
+    }, _pcfg);
+  } else if (mode === 'waterfall') {
+    Plotly.react(divId, _waterfallTraces(freqs, times, zT), _wl(title, 'Frequency (Hz)',
+      isDiff ? 'ΔdB (offset per time slice)' : 'dB (offset per time slice)', {
+        margin: { l: 50, r: 20, t: 26, b: 34 },
+        xaxis: { type: _logFreq ? 'log' : 'linear' },
+        showlegend: false,
+      }), _pcfg);
+  } else {
+    const trace = { x: freqs, y: times, z: zT, type: 'heatmap', colorscale, showscale: true,
+      colorbar: { title: isDiff ? 'ΔdB' : 'dB', titleside: 'right', thickness: 10, len: 0.95, tickfont: { size: 9 } },
+      zsmooth: 'fast', hoverinfo: 'skip' };
+    if (isDiff) { const m = _maxAbs(zT); trace.zmin = -m; trace.zmax = m; }
+    Plotly.react(divId, [trace], _wl(title, 'Frequency (Hz)', 'Time (s)', {
+      margin: { l: 50, r: 45, t: 26, b: 34 },
+      xaxis: { type: _logFreq ? 'log' : 'linear' },
+    }), _pcfg);
+  }
+}
+
+window.specViewModeChanged = function() {
+  specRenderAll();
+};
 
 function renderFrameInfo(slot, times, freqs) {
   const el = document.getElementById(`frame-info-${slot}`);
@@ -167,11 +236,13 @@ function specSettingsChanged() {
   const fMax = +document.getElementById('fmax-inp').value;
   if (!window.pySpecRecompute) return;
   window.pySpecRecompute(nFft, hop, fMax);
+  if (_mode === 'diff') _requestDiff();
 }
 
 function specRenderAll() {
   renderSpec('a');
   renderSpec('b');
+  if (_diffCache && _mode === 'diff') _renderGrid('diff-plot', _diffCache, 'Difference: Sample A − Sample B', true);
 }
 
 function updateChanBtn(slot) {
@@ -192,6 +263,59 @@ window.specToggleFreqScale = function() {
   btn.textContent = _logFreq ? 'Freq: Log' : 'Freq: Lin';
   btn.classList.toggle('active', _logFreq);
   specRenderAll();
+};
+
+// ── Compare vs Difference mode ──────────────────────────────────────────
+// Difference computes Sample A's spectrogram minus Sample B's (interpolated
+// onto A's frequency/time grid — see main.py's _compute_diff) so intensity
+// differences show as "mountains and valleys" rather than raw dB.
+let _mode = 'compare';   // 'compare' | 'diff'
+let _diffCache = null;
+
+window.specSetMode = function(mode) {
+  _mode = mode;
+  document.getElementById('mode-compare-btn').classList.toggle('active', mode === 'compare');
+  document.getElementById('mode-diff-btn').classList.toggle('active', mode === 'diff');
+  document.getElementById('compare-view').style.display = mode === 'compare' ? '' : 'none';
+  document.getElementById('diff-view').style.display = mode === 'diff' ? '' : 'none';
+  if (mode === 'diff') {
+    _requestDiff();
+  } else {
+    ['waveform-plot-a', 'spec-plot-a', 'waveform-plot-b', 'spec-plot-b'].forEach(id => {
+      const el = document.getElementById(id); if (el) Plotly.Plots.resize(el);
+    });
+  }
+};
+
+function _requestDiff() {
+  if (!slots.a.samples || !slots.b.samples) {
+    const el = document.getElementById('diff-status');
+    el.textContent = 'load or record both samples first';
+    el.className = 'sp-panel-status';
+    return;
+  }
+  if (!window.pySpecComputeDiff) return;
+  const nFft = +document.getElementById('n-fft-sel').value;
+  const hop  = +document.getElementById('hop-sel').value;
+  const fMax = +document.getElementById('fmax-inp').value;
+  const el = document.getElementById('diff-status');
+  el.textContent = 'computing…';
+  el.className = 'sp-panel-status';
+  window.pySpecComputeDiff(nFft, hop, fMax);
+}
+
+window.onSpecDiffResult = function(times_js, freqs_js, flatZ_js, nFreqs, nTimes) {
+  _diffCache = _unpackSpec(times_js, freqs_js, flatZ_js, nFreqs, nTimes);
+  const el = document.getElementById('diff-status');
+  el.textContent = 'A − B';
+  el.className = 'sp-panel-status ok';
+  if (_mode === 'diff') _renderGrid('diff-plot', _diffCache, 'Difference: Sample A − Sample B', true);
+};
+
+window.onSpecDiffError = function(msg) {
+  const el = document.getElementById('diff-status');
+  el.textContent = 'error: ' + msg;
+  el.className = 'sp-panel-status err';
 };
 
 // ── Live microphone recording ──────────────────────────────────────────
@@ -384,7 +508,7 @@ function _initResizer() {
     if (!dragging) return;
     const w = Math.max(160, Math.min(360, startW + (e.clientX - startX)));
     sidebar.style.width = w + 'px';
-    ['waveform-plot-a', 'spec-plot-a', 'waveform-plot-b', 'spec-plot-b'].forEach(id => {
+    ['waveform-plot-a', 'spec-plot-a', 'waveform-plot-b', 'spec-plot-b', 'diff-plot'].forEach(id => {
       const el = document.getElementById(id);
       if (el) Plotly.Plots.resize(el);
     });
