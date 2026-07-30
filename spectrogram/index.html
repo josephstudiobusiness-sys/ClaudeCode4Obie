@@ -46,7 +46,12 @@
   <div class="sp-toolbar">
     <div class="tb-group">
       <button id="mode-compare-btn" class="tb-btn active" onclick="specSetMode('compare')" title="Show Sample A and Sample B side by side">🆚 Compare</button>
+      <button id="mode-single-btn" class="tb-btn" onclick="specSetMode('single')" title="Show just one sample, full width">🔎 Single</button>
       <button id="mode-diff-btn" class="tb-btn" onclick="specSetMode('diff')" title="Show the intensity difference A − B as one plot">⛰ Difference</button>
+    </div>
+    <div class="tb-group" id="single-slot-group" style="display:none">
+      <button id="single-a-btn" class="tb-btn active" onclick="specSetSingleSlot('a')">Sample A</button>
+      <button id="single-b-btn" class="tb-btn" onclick="specSetSingleSlot('b')">Sample B</button>
     </div>
     <div class="tb-flex"></div>
     <button id="mirror-axis-btn" class="tb-btn" onclick="specToggleMirrorAxis()" style="display:none"
@@ -131,8 +136,9 @@
 
       <div class="sp-sect">ℹ How to compare</div>
       <div class="sp-content">
-        <p class="sp-hint" style="margin:0 0 6px">Load a file or record from the mic into <strong>Sample A</strong> and <strong>Sample B</strong> below — only one mic recording can run at a time.</p>
-        <p class="sp-hint" style="margin:0">Switch to <strong>⛰ Difference</strong> above to see Sample A's intensity minus Sample B's, as one plot — 3D Surface makes the peaks and dips easiest to read. <strong>Mirror</strong> instead shows A and B side by side around a center line, without subtracting them.</p>
+        <p class="sp-hint" style="margin:0 0 6px">Load a file (WAV, MP3, or FRF: TRF/TRV/AvC/AvR/CSV/MAT) or record from the mic into <strong>Sample A</strong> and <strong>Sample B</strong> below — only one mic recording can run at a time.</p>
+        <p class="sp-hint" style="margin:0 0 6px">Switch to <strong>🔎 Single</strong> to view just one sample, full width.</p>
+        <p class="sp-hint" style="margin:0">Switch to <strong>⛰ Difference</strong> to see Sample A's intensity minus Sample B's, as one plot — 3D Surface makes the peaks and dips easiest to read. <strong>Mirror</strong> instead shows A and B side by side around a center line, without subtracting them.</p>
       </div>
     </div><!-- sp-sidebar -->
 
@@ -147,9 +153,9 @@
         <div class="sp-panel-toolbar">
           <span class="sp-panel-title">Sample A</span>
           <label class="file-btn" id="file-btn-label-a" style="width:auto"
-                 title="WAV (audio) or TRF/TRV/AvC/AvR/CSV/MAT (FRF — IFFT'd to an impulse response)">
+                 title="WAV/MP3 (audio) or TRF/TRV/AvC/AvR/CSV/MAT (FRF — IFFT'd to an impulse response)">
             <span id="wav-btn-text-a">📂 Load</span>
-            <input type="file" id="wav-input-a" accept=".wav,.trf,.trv,.avc,.avr,.csv,.mat,audio/wav,audio/*"
+            <input type="file" id="wav-input-a" accept=".wav,.mp3,.trf,.trv,.avc,.avr,.csv,.mat,audio/wav,audio/mpeg,audio/*"
                    onchange="loadFile('a', this)">
           </label>
           <button id="mic-btn-a" class="tb-btn" onclick="specToggleRecord('a')" title="Record from your microphone">🎤 Record</button>
@@ -173,9 +179,9 @@
         <div class="sp-panel-toolbar">
           <span class="sp-panel-title">Sample B</span>
           <label class="file-btn" id="file-btn-label-b" style="width:auto"
-                 title="WAV (audio) or TRF/TRV/AvC/AvR/CSV/MAT (FRF — IFFT'd to an impulse response)">
+                 title="WAV/MP3 (audio) or TRF/TRV/AvC/AvR/CSV/MAT (FRF — IFFT'd to an impulse response)">
             <span id="wav-btn-text-b">📂 Load</span>
-            <input type="file" id="wav-input-b" accept=".wav,.trf,.trv,.avc,.avr,.csv,.mat,audio/wav,audio/*"
+            <input type="file" id="wav-input-b" accept=".wav,.mp3,.trf,.trv,.avc,.avr,.csv,.mat,audio/wav,audio/mpeg,audio/*"
                    onchange="loadFile('b', this)">
           </label>
           <button id="mic-btn-b" class="tb-btn" onclick="specToggleRecord('b')" title="Record from your microphone">🎤 Record</button>

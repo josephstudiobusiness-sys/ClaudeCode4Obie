@@ -3,6 +3,9 @@ main.py — Spectrogram tool entry point.
 
 Python-side responsibilities:
   - Decode WAV bytes                    → Python/fileio/wavfileio.py (load_wav_bytes)
+  - Store pre-decoded audio (e.g. MP3)  → browser's own Web Audio decoder
+                                            does the format decoding in JS;
+                                            this just normalises + stores it
   - Parse complex/FRF files              → Python/fileio/{trf,avc,tsv,mat}_fileio.py
   - IFFT an FRF to an impulse response   → Python/processing/convolution.py
                                             (_frf_to_ir, _minimum_phase)
@@ -157,6 +160,43 @@ def _load_wav(slot_js, filename_js, data_js):
 
 
 js.window.pySpecLoadWav = create_proxy(_load_wav)
+
+
+# ── Pre-decoded audio (e.g. MP3) ────────────────────────────────────────────
+# scipy.io.wavfile only reads WAV — for anything else the browser's own
+# decoder (Web Audio API's decodeAudioData, called from spectrogram.js) does
+# the format decoding client-side and hands us plain float samples here, at
+# which point it's handled exactly like a WAV: peak-normalise, split
+# channels, store.
+
+def _load_decoded_audio(slot_js, filename_js, samples_js, sr_js, n_channels_js):
+    slot  = str(slot_js)
+    fname = str(filename_js)
+    try:
+        n_channels = int(n_channels_js)
+        sr = int(sr_js)
+        flat = np.array(samples_js.to_py(), dtype=np.float32)
+        peak = float(np.max(np.abs(flat))) or 1.0
+        flat = flat / peak
+
+        stereo = n_channels == 2
+        if stereo:
+            l = flat[0::2].astype(np.float64)
+            r = flat[1::2].astype(np.float64)
+        else:
+            l = flat.astype(np.float64)
+            r = None
+
+        name = fname.rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
+        n_frames = len(l)
+        info = (f'{name} · {n_frames / sr:.2f}s · {sr / 1000:.1f}kHz · '
+                f'{"stereo" if stereo else "mono"}')
+        _store_sample(slot, sr, l, r, flat, n_channels, info, stereo)
+    except Exception as exc:
+        js.window.onSpecSampleError(slot, str(exc)[:160])
+
+
+js.window.pySpecLoadDecodedAudio = create_proxy(_load_decoded_audio)
 
 
 # ── Complex / FRF file loading (TRF, TRV, AVC, AVR, CSV, MAT) ──────────────

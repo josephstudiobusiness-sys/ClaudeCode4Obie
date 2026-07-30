@@ -40,22 +40,57 @@ const _wl = (title, xl, yl, extra) => ({
 });
 Plotly.newPlot('diff-plot', [], _wl('Difference: Sample A − Sample B', 'Frequency (Hz)', 'Time (s)'), _pcfg);
 
-// ── File loading (WAV, or FRF files IFFT'd to an impulse response) ────
+// ── File loading (WAV, MP3, or FRF files IFFT'd to an impulse response) ──
+// WAV bytes go straight to Python (scipy reads the format directly). MP3 —
+// and anything else scipy can't parse — is decoded first via the browser's
+// own Web Audio decoder (decodeAudioData), then the resulting float samples
+// are handed to Python exactly like a WAV would be. FRF files (.trf/.trv/
+// .avc/.avr/.csv/.mat) go through the IFFT-to-impulse-response path.
+async function _decodeAudioFile(arrayBuffer) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  let buf;
+  try {
+    buf = await ctx.decodeAudioData(arrayBuffer);
+  } finally {
+    ctx.close().catch(() => {});
+  }
+  const sr = buf.sampleRate;
+  if (buf.numberOfChannels >= 2) {
+    const l = buf.getChannelData(0), r = buf.getChannelData(1);
+    const interleaved = new Float32Array(l.length * 2);
+    for (let i = 0; i < l.length; i++) { interleaved[2 * i] = l[i]; interleaved[2 * i + 1] = r[i]; }
+    return { samples: interleaved, sr, nChannels: 2 };
+  }
+  return { samples: buf.getChannelData(0).slice(), sr, nChannels: 1 };
+}
+
+const FRF_EXTS = ['trf', 'trv', 'avc', 'avr', 'csv', 'mat'];
+
 function loadFile(slot, input) {
   const file = input.files[0]; if (!file) return;
   if (_recordingSlot) stopRecording();
   document.getElementById(`wav-btn-text-${slot}`).textContent = file.name;
   setSt(slot, 'reading…');
   const ext = (file.name.split('.').pop() || '').toLowerCase();
-  const isWav = ext === 'wav';
   const reader = new FileReader();
   reader.onerror = () => setSt(slot, 'read error', 'err');
-  reader.onload  = e => {
-    const fn = isWav ? window.pySpecLoadWav : window.pySpecLoadComplex;
-    if (!fn) {
-      setSt(slot, 'Python not ready — try again in a moment', 'err'); return;
+  reader.onload = async e => {
+    if (ext === 'wav') {
+      if (!window.pySpecLoadWav) { setSt(slot, 'Python not ready — try again in a moment', 'err'); return; }
+      window.pySpecLoadWav(slot, file.name, new Uint8Array(e.target.result));
+    } else if (FRF_EXTS.includes(ext)) {
+      if (!window.pySpecLoadComplex) { setSt(slot, 'Python not ready — try again in a moment', 'err'); return; }
+      window.pySpecLoadComplex(slot, file.name, new Uint8Array(e.target.result));
+    } else {
+      // mp3 and anything else — decode client-side via Web Audio first.
+      if (!window.pySpecLoadDecodedAudio) { setSt(slot, 'Python not ready — try again in a moment', 'err'); return; }
+      try {
+        const { samples, sr, nChannels } = await _decodeAudioFile(e.target.result);
+        window.pySpecLoadDecodedAudio(slot, file.name, samples, sr, nChannels);
+      } catch (err) {
+        setSt(slot, 'could not decode audio: ' + err.message.slice(0, 60), 'err');
+      }
     }
-    fn(slot, file.name, new Uint8Array(e.target.result));
   };
   reader.readAsArrayBuffer(file);
 }
@@ -243,7 +278,10 @@ function _avgSpectrum(cache) {
 function _renderMirrorByFreq(divId, title, aCache, bCache) {
   const freqsA = aCache.freqs, freqsB = bCache.freqs;
   const avgA = _avgSpectrum(aCache), avgB = _avgSpectrum(bCache);
-  const floor = Math.min(Math.min(...avgA), Math.min(...avgB));
+  // reduce(), not Math.min(...arr) — spreading a large array into a function
+  // call can overflow the JS argument stack.
+  const floor = Math.min(avgA.reduce((m, v) => Math.min(m, v), Infinity),
+                          avgB.reduce((m, v) => Math.min(m, v), Infinity));
   const extentA = avgA.map(v => -(v - floor));   // negative → extends left
   const extentB = avgB.map(v => v - floor);      // positive → extends right
   const fMin = Math.min(freqsA[0], freqsB[0]), fMax = Math.max(freqsA.at(-1), freqsB.at(-1));
@@ -413,19 +451,42 @@ window.specToggleFreqScale = function() {
   specRenderAll();
 };
 
-// ── Compare vs Difference mode ──────────────────────────────────────────
+// ── Compare vs Single vs Difference mode ────────────────────────────────
 // Difference computes Sample A's spectrogram minus Sample B's (interpolated
 // onto A's frequency/time grid — see main.py's _compute_diff) so intensity
 // differences show as "mountains and valleys" rather than raw dB.
-let _mode = 'compare';   // 'compare' | 'diff'
+// Single reuses the same two panels as Compare (no separate plots/render
+// path to maintain) — it just hides one side via CSS so the other fills
+// the width.
+let _mode = 'compare';       // 'compare' | 'single' | 'diff'
+let _singleSlot = 'a';       // which sample Single mode shows
 let _diffCache = null;
+
+function _applySingleClass() {
+  const el = document.getElementById('compare-view');
+  el.classList.remove('single-a', 'single-b');
+  if (_mode === 'single') el.classList.add('single-' + _singleSlot);
+}
+
+window.specSetSingleSlot = function(slot) {
+  _singleSlot = slot;
+  document.getElementById('single-a-btn').classList.toggle('active', slot === 'a');
+  document.getElementById('single-b-btn').classList.toggle('active', slot === 'b');
+  _applySingleClass();
+  [`waveform-plot-${slot}`, `spec-plot-${slot}`].forEach(id => {
+    const el = document.getElementById(id); if (el) setTimeout(() => Plotly.Plots.resize(el), 0);
+  });
+};
 
 window.specSetMode = function(mode) {
   _mode = mode;
   document.getElementById('mode-compare-btn').classList.toggle('active', mode === 'compare');
+  document.getElementById('mode-single-btn').classList.toggle('active', mode === 'single');
   document.getElementById('mode-diff-btn').classList.toggle('active', mode === 'diff');
-  document.getElementById('compare-view').style.display = mode === 'compare' ? '' : 'none';
+  document.getElementById('compare-view').style.display = mode === 'diff' ? 'none' : '';
   document.getElementById('diff-view').style.display = mode === 'diff' ? '' : 'none';
+  document.getElementById('single-slot-group').style.display = mode === 'single' ? '' : 'none';
+  _applySingleClass();
   _updateMirrorAxisBtn();
   if (mode === 'diff') {
     _updateDiffLegend();

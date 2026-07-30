@@ -143,6 +143,12 @@ header.obie-header .gap { flex: 1; }
 }
 .sp-panel-divider { width: 1px; flex-shrink: 0; background: var(--border); }
 
+/* ── Single-sample mode — reuses the same panels, just hides one side ─── */
+.sp-compare.single-a .sp-panel[data-slot="b"],
+.sp-compare.single-b .sp-panel[data-slot="a"],
+.sp-compare.single-a .sp-panel-divider,
+.sp-compare.single-b .sp-panel-divider { display: none; }
+
 /* ── Full-width difference view (A − B) ────────────────────────────────── */
 .sp-diffview { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 

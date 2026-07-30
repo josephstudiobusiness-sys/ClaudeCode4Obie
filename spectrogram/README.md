@@ -4,24 +4,38 @@ A standalone, browser-based spectrogram viewer built with PyScript + Plotly,
 following the ObieWebApp look & feel (see
 [ObieApp/CLAUDE.md](https://github.com/chrisbuerginrogers/ObieApp/blob/main/CLAUDE.md)).
 
-The tool shows **two samples side by side — Sample A and Sample B** — so you
-can compare spectrograms directly. Each sample is loaded independently, in
-one of two ways:
+The tool shows **two samples — Sample A and Sample B** — loaded independently,
+in one of two ways:
 
-- **Load a WAV file** — view its waveform and STFT spectrogram directly.
-  Stereo files can toggle between L/R channel spectrograms. Playback uses
+- **Load a file**:
+  - `.wav` — decoded directly by the canonical `wavfileio.py`.
+  - `.mp3` — scipy (which `wavfileio.py` uses) can't read MP3, so it's
+    decoded client-side first via the browser's own Web Audio decoder
+    (`AudioContext.decodeAudioData`, the same native decoder Chrome/Edge use
+    for `<audio>` playback), then handed to Python as plain float samples —
+    from there it's treated exactly like a WAV.
+  - Complex/FRF files (`.trf`, `.trv`, `.avc`, `.avr`, `.csv`, `.mat`) — these
+    store a frequency-domain transfer function, not audio, so the tool IFFTs
+    it to a time-domain impulse response (phase-aware when the file carries
+    phase, e.g. TRF `fComplex=1/2` or AvC; minimum-phase estimated otherwise)
+    and shows *that* impulse response's spectrogram.
+
+  All of these support stereo, with an L/R channel toggle and playback via
   the browser's `AudioContext`.
-- **Load a complex/FRF file** (`.trf`, `.trv`, `.avc`, `.avr`, `.csv`, `.mat`)
-  — these store a frequency-domain transfer function, not audio, so the
-  tool IFFTs it to a time-domain impulse response (phase-aware when the
-  file carries phase, e.g. TRF `fComplex=1/2` or AvC; minimum-phase
-  estimated otherwise) and shows *that* impulse response's spectrogram.
 - **Record from the mic** — click Record on either sample to capture live
   audio; the spectrogram updates in real time (rolling 5 s window) while
   recording, and on Stop the full clip becomes that sample's static
   spectrogram, ready to compare against the other side. Only one sample can
   record at a time (one physical microphone) — the other side's Record
   button is disabled meanwhile.
+
+Three view modes, via the toolbar:
+
+- **🆚 Compare** (default) — Sample A and Sample B side by side.
+- **🔎 Single** — just one sample, full width (a "Sample A / Sample B" toggle
+  picks which). Reuses the same panels as Compare — no separate plots to
+  keep in sync, it's a pure layout toggle.
+- **⛰ Difference** — see below.
 
 FFT window size, hop size, max frequency, **frequency smoothing**, colorscale,
 and the frequency-axis scale are all adjustable in the sidebar and apply to
@@ -89,11 +103,17 @@ loaded live from GitHub at runtime — none of it is reimplemented here (see
 - [`Python/processing/convolution.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/processing/convolution.py) — `_frf_to_ir` / `_minimum_phase` (FRF → impulse response), the same helpers Convolve uses internally
 - [`Python/processing/spectrogram.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/processing/spectrogram.py) — the STFT itself, used for files, each live-mic update, and both sides of the Difference view
 
-Frequency smoothing is the one exception — there's no canonical Python module
-for it in ObieApp (checked before writing anything). Explore implements it
-client-side in JS ([`explore.js`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Web/tools/explore/explore.js), `_smooth()`), so `main.py` reuses that
-same ratio-window algorithm rather than inventing a different one, adapted to
-run across a whole spectrogram matrix via numpy.
+Frequency smoothing and MP3 decoding are the two exceptions to "everything
+comes from ObieApp's Python modules" — for good reason in each case:
+- Smoothing has no canonical Python module in ObieApp (checked before writing
+  anything). Explore implements it client-side in JS
+  ([`explore.js`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Web/tools/explore/explore.js), `_smooth()`), so `main.py` reuses that same
+  ratio-window algorithm rather than inventing a different one, adapted to
+  run across a whole spectrogram matrix via numpy.
+- MP3 decoding isn't signal processing ObieApp owns at all — it's a codec,
+  and scipy (which `wavfileio.py` is built on) doesn't support it. The
+  browser's own decoder is the appropriate tool here, not a Python
+  reimplementation of an MP3 decoder.
 
 The mic capture path (`AudioWorkletNode` → batched samples → a Python rolling
 buffer for the live preview, plus the full clip kept client-side for the
