@@ -177,7 +177,10 @@ function _renderGrid(divId, cache, title, isDiff) {
     const trace = { x: freqs, y: times, z: zT, type: 'surface', colorscale, showscale: true,
       colorbar: { title: isDiff ? 'ΔdB' : 'dB', titleside: 'right', thickness: 10, tickfont: { size: 9 } },
       hovertemplate: hoverTemplate3D };
-    if (isDiff) { const m = _maxAbs(zT); trace.cmin = -m; trace.cmax = m; }
+    // Plotly's built-in 'RdBu' maps low→red, high→blue — the opposite of the
+    // A-is-red/B-is-blue convention (see the legend in the diff toolbar), so
+    // flip it: negative (B louder) → blue, positive (A louder) → red.
+    if (isDiff) { const m = _maxAbs(zT); trace.cmin = -m; trace.cmax = m; trace.reversescale = true; }
     Plotly.react(divId, [trace], {
       title: { text: title, font: { size: 11 }, pad: { t: 2, b: 0 } },
       font: { size: 10, family: 'inherit' },
@@ -200,7 +203,7 @@ function _renderGrid(divId, cache, title, isDiff) {
     const trace = { x: freqs, y: times, z: zT, type: 'heatmap', colorscale, showscale: true,
       colorbar: { title: isDiff ? 'ΔdB' : 'dB', titleside: 'right', thickness: 10, len: 0.95, tickfont: { size: 9 } },
       zsmooth: 'fast', hovertemplate: hoverTemplate3D };
-    if (isDiff) { const m = _maxAbs(zT); trace.zmin = -m; trace.zmax = m; }
+    if (isDiff) { const m = _maxAbs(zT); trace.zmin = -m; trace.zmax = m; trace.reversescale = true; }
     Plotly.react(divId, [trace], _wl(title, 'Frequency (Hz)', 'Time (s)', {
       margin: { l: 50, r: 45, t: 26, b: 34 },
       xaxis: { type: _logFreq ? 'log' : 'linear' },
@@ -208,7 +211,17 @@ function _renderGrid(divId, cache, title, isDiff) {
   }
 }
 
+// The A-red/B-blue legend only applies to Heatmap/3D Surface, where colour
+// encodes the sign of the difference. Waterfall colours lines by time
+// instead (see _waterfallTraces), so the legend would be misleading there.
+function _updateDiffLegend() {
+  const legend = document.getElementById('diff-legend');
+  const mode = document.getElementById('view-mode-sel').value;
+  legend.style.display = mode === 'waterfall' ? 'none' : '';
+}
+
 window.specViewModeChanged = function() {
+  _updateDiffLegend();
   specRenderAll();
 };
 
@@ -289,6 +302,7 @@ window.specSetMode = function(mode) {
   document.getElementById('compare-view').style.display = mode === 'compare' ? '' : 'none';
   document.getElementById('diff-view').style.display = mode === 'diff' ? '' : 'none';
   if (mode === 'diff') {
+    _updateDiffLegend();
     _requestDiff();
   } else {
     ['waveform-plot-a', 'spec-plot-a', 'waveform-plot-b', 'spec-plot-b'].forEach(id => {

@@ -45,10 +45,13 @@ Sample A, Sample B, or the Difference view:
 
 Toggle **⛰ Difference** (top toolbar) to see Sample A's spectrogram minus
 Sample B's as one plot — peaks where A is louder than B, valleys where B is
-louder, using a zero-centred diverging colorscale (RdBu) so it reads as
-"mountains and valleys" rather than raw dB. 3D Surface is the most literal
-read on this; Heatmap and Waterfall work too. If A and B differ in sample
-rate or length, B is resampled onto A's frequency/time grid first.
+louder, using a zero-centred diverging colorscale (RdBu, reversed so
+**red = A louder, blue = B louder**) so it reads as "mountains and valleys"
+rather than raw dB. A colour key showing this appears next to the plot title
+in Heatmap and 3D Surface (the two modes where colour encodes A-vs-B) — it's
+hidden in Waterfall mode, where colour instead encodes time. 3D Surface is
+the most literal read on the "mountains and valleys." If A and B differ in
+sample rate or length, B is resampled onto A's frequency/time grid first.
 
 All signal processing is delegated to the canonical ObieApp Python modules,
 loaded live from GitHub at runtime — none of it is reimplemented here (see
