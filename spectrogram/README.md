@@ -4,7 +4,9 @@ A standalone, browser-based spectrogram viewer built with PyScript + Plotly,
 following the ObieWebApp look & feel (see
 [ObieApp/CLAUDE.md](https://github.com/chrisbuerginrogers/ObieApp/blob/main/CLAUDE.md)).
 
-Three ways to get a spectrogram:
+The tool shows **two samples side by side — Sample A and Sample B** — so you
+can compare spectrograms directly. Each sample is loaded independently, in
+one of two ways:
 
 - **Load a WAV file** — view its waveform and STFT spectrogram directly.
   Stereo files can toggle between L/R channel spectrograms. Playback uses
@@ -14,11 +16,17 @@ Three ways to get a spectrogram:
   tool IFFTs it to a time-domain impulse response (phase-aware when the
   file carries phase, e.g. TRF `fComplex=1/2` or AvC; minimum-phase
   estimated otherwise) and shows *that* impulse response's spectrogram.
-- **Live Mic** — a real-time, continuously-updating spectrogram of the
-  last 5 seconds of microphone input.
+- **Record from the mic** — click Record on either sample to capture live
+  audio; the spectrogram updates in real time (rolling 5 s window) while
+  recording, and on Stop the full clip becomes that sample's static
+  spectrogram, ready to compare against the other side. Only one sample can
+  record at a time (one physical microphone) — the other side's Record
+  button is disabled meanwhile.
 
-FFT window size, hop size, max frequency, and colorscale are all adjustable
-in the sidebar and apply to all three modes.
+FFT window size, hop size, max frequency, colorscale, and the frequency-axis
+scale are all adjustable in the sidebar and apply to **both** samples, so the
+comparison is apples-to-apples. The spectrogram axes run frequency (x) ×
+time (y).
 
 All signal processing is delegated to the canonical ObieApp Python modules,
 loaded live from GitHub at runtime — none of it is reimplemented here (see
@@ -29,8 +37,9 @@ loaded live from GitHub at runtime — none of it is reimplemented here (see
 - [`Python/processing/convolution.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/processing/convolution.py) — `_frf_to_ir` / `_minimum_phase` (FRF → impulse response), the same helpers Convolve uses internally
 - [`Python/processing/spectrogram.py`](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Python/processing/spectrogram.py) — the STFT itself, used for files and for each live-mic update
 
-The live-mic capture path (`AudioWorkletNode` → batched samples → a Python
-rolling buffer) mirrors the pattern already used by
+The mic capture path (`AudioWorkletNode` → batched samples → a Python rolling
+buffer for the live preview, plus the full clip kept client-side for the
+final static spectrogram on Stop) mirrors the capture pattern already used by
 [Acquire](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Web/tools/acquire/acquire.js).
 
 ## Deploying

@@ -42,35 +42,21 @@
     <button class="tb-btn" onclick="specHelp()">Help</button>
   </header>
 
-  <!-- ── Toolbar ─────────────────────────────────────────────────────── -->
+  <!-- ── Toolbar (applies to both samples) ──────────────────────────── -->
   <div class="sp-toolbar">
-    <label class="file-btn" id="file-btn-label" style="width:auto"
-           title="WAV (audio) or TRF/TRV/AvC/AvR/CSV/MAT (FRF — IFFT'd to an impulse response)">
-      <span id="wav-btn-text">📂 Load File</span>
-      <input type="file" id="wav-input" accept=".wav,.trf,.trv,.avc,.avr,.csv,.mat,audio/wav,audio/*"
-             onchange="loadFile(this)">
-    </label>
-    <button id="mic-btn" class="tb-btn" onclick="specToggleMic()" title="Live spectrogram from your microphone">🎤 Live Mic</button>
-    <span id="wav-status" class="sp-status-txt">no file loaded</span>
-    <button id="play-btn" class="tb-btn accent" data-label="WAV" onclick="togglePlay()" disabled>▶ Play</button>
+    <span class="sp-toolbar-lbl">Compare two samples side by side —</span>
     <div class="tb-flex"></div>
     <button id="freq-scale-btn" class="tb-btn" onclick="specToggleFreqScale()"
             title="Toggle spectrogram frequency axis between linear and log">Freq: Lin</button>
-    <button id="chan-btn" class="tb-btn" onclick="specToggleChannel()" style="display:none">Show R ▶</button>
     <button class="tb-btn" onclick="specPreferences()">Settings</button>
   </div>
 
-  <!-- ── Main body: sidebar + resizer + plot area ───────────────────── -->
+  <!-- ── Main body: sidebar + resizer + two comparison panels ────────── -->
   <div class="sp-body">
 
-    <!-- Left: settings sidebar -->
+    <!-- Left: shared FFT settings sidebar -->
     <div class="sp-sidebar">
-      <div class="sp-sect">ℹ File</div>
-      <div class="sp-content">
-        <div class="fileinfo" id="wav-info">Load a WAV file, an FRF file (TRF/TRV/AvC/AvR/CSV/MAT — shown as its impulse response), or start Live Mic.</div>
-      </div>
-
-      <div class="sp-sect">⚙️ FFT Settings</div>
+      <div class="sp-sect">⚙️ FFT Settings <span class="sp-sect-note">(shared)</span></div>
       <div class="sp-content">
         <div class="sp-row">
           <label for="n-fft-sel">Window size</label>
@@ -107,27 +93,72 @@
             <option value="Greys">Greyscale</option>
           </select>
         </div>
-        <p class="sp-hint">Higher window size = finer frequency resolution, coarser time resolution.</p>
+        <p class="sp-hint">Higher window size = finer frequency resolution, coarser time resolution. Settings apply to both samples so the comparison is apples-to-apples.</p>
       </div>
 
-      <div class="sp-sect">📊 Info</div>
+      <div class="sp-sect">ℹ How to compare</div>
       <div class="sp-content">
-        <div class="sp-info-body" id="frame-info">–</div>
+        <p class="sp-hint" style="margin:0">Load a file or record from the mic into <strong>Sample A</strong> and <strong>Sample B</strong> below — only one mic recording can run at a time.</p>
       </div>
     </div><!-- sp-sidebar -->
 
     <!-- Drag handle -->
     <div id="sp-resizer" class="sp-resizer"></div>
 
-    <!-- Right: plots -->
-    <div class="sp-plot-wrap">
-      <div class="sp-plot-row sp-waveform-row">
-        <div id="waveform-plot" class="plot-div"></div>
+    <!-- Right: two side-by-side comparison panels -->
+    <div class="sp-compare">
+
+      <!-- ── Sample A ──────────────────────────────────────────────── -->
+      <div class="sp-panel" data-slot="a">
+        <div class="sp-panel-toolbar">
+          <span class="sp-panel-title">Sample A</span>
+          <label class="file-btn" id="file-btn-label-a" style="width:auto"
+                 title="WAV (audio) or TRF/TRV/AvC/AvR/CSV/MAT (FRF — IFFT'd to an impulse response)">
+            <span id="wav-btn-text-a">📂 Load</span>
+            <input type="file" id="wav-input-a" accept=".wav,.trf,.trv,.avc,.avr,.csv,.mat,audio/wav,audio/*"
+                   onchange="loadFile('a', this)">
+          </label>
+          <button id="mic-btn-a" class="tb-btn" onclick="specToggleRecord('a')" title="Record from your microphone">🎤 Record</button>
+          <button id="play-btn-a" class="tb-btn accent" data-label="A" onclick="togglePlay('a')" disabled>▶</button>
+          <button id="chan-btn-a" class="tb-btn" onclick="specToggleChannel('a')" style="display:none">Show R ▶</button>
+        </div>
+        <div class="sp-panel-status" id="wav-status-a">no sample loaded</div>
+        <div class="sp-plot-row sp-waveform-row">
+          <div id="waveform-plot-a" class="plot-div"></div>
+        </div>
+        <div class="sp-plot-row sp-spec-row">
+          <div id="spec-plot-a" class="plot-div"></div>
+        </div>
+        <div class="sp-panel-frameinfo" id="frame-info-a">–</div>
       </div>
-      <div class="sp-plot-row sp-spec-row">
-        <div id="spec-plot" class="plot-div"></div>
+
+      <div class="sp-panel-divider"></div>
+
+      <!-- ── Sample B ──────────────────────────────────────────────── -->
+      <div class="sp-panel" data-slot="b">
+        <div class="sp-panel-toolbar">
+          <span class="sp-panel-title">Sample B</span>
+          <label class="file-btn" id="file-btn-label-b" style="width:auto"
+                 title="WAV (audio) or TRF/TRV/AvC/AvR/CSV/MAT (FRF — IFFT'd to an impulse response)">
+            <span id="wav-btn-text-b">📂 Load</span>
+            <input type="file" id="wav-input-b" accept=".wav,.trf,.trv,.avc,.avr,.csv,.mat,audio/wav,audio/*"
+                   onchange="loadFile('b', this)">
+          </label>
+          <button id="mic-btn-b" class="tb-btn" onclick="specToggleRecord('b')" title="Record from your microphone">🎤 Record</button>
+          <button id="play-btn-b" class="tb-btn accent" data-label="B" onclick="togglePlay('b')" disabled>▶</button>
+          <button id="chan-btn-b" class="tb-btn" onclick="specToggleChannel('b')" style="display:none">Show R ▶</button>
+        </div>
+        <div class="sp-panel-status" id="wav-status-b">no sample loaded</div>
+        <div class="sp-plot-row sp-waveform-row">
+          <div id="waveform-plot-b" class="plot-div"></div>
+        </div>
+        <div class="sp-plot-row sp-spec-row">
+          <div id="spec-plot-b" class="plot-div"></div>
+        </div>
+        <div class="sp-panel-frameinfo" id="frame-info-b">–</div>
       </div>
-    </div>
+
+    </div><!-- sp-compare -->
 
   </div><!-- sp-body -->
 

@@ -9,6 +9,11 @@ Python-side responsibilities:
   - Compute the STFT spectrogram         → Python/processing/spectrogram.py
   - Roll a live-mic ring buffer and recompute its spectrogram on each push
 
+There are two independent "slots" ('a' and 'b') so two samples — each loaded
+from a file or recorded from the mic — can be compared side by side. Both
+slots share one set of FFT settings (n_fft/hop/f_max) so the comparison is
+apples-to-apples.
+
 All of the above delegate to the canonical ObieApp implementations, loaded
 from GitHub via pyscript.toml — no signal processing is reimplemented here.
 """
@@ -39,10 +44,11 @@ configure('obieWebApp_spectrogram', {
 # OBIE_META block), which we use when present; otherwise this is our fallback.
 _DEFAULT_FRF_SR = 48000
 
-# ── Module-level state — the last-loaded signal's normalised channel data ──
-_sr     = None   # int sample rate
-_l_norm = None   # np.ndarray float64, [-1, 1], left/mono channel
-_r_norm = None   # np.ndarray float64, [-1, 1], right channel — None if mono
+# ── Module-level state — one entry per slot ('a' / 'b') ─────────────────────
+_slots = {
+    'a': {'sr': None, 'l': None, 'r': None},   # l/r: np.ndarray float64 [-1,1], or None
+    'b': {'sr': None, 'l': None, 'r': None},
+}
 
 
 def _to_float32(data):
@@ -55,34 +61,44 @@ def _to_float32(data):
     return data.astype(np.float32)
 
 
-def _send_spectrogram(sig, sr, n_fft, hop, f_max, cb):
-    """Compute one channel's spectrogram via the canonical module and fire a JS callback."""
+def _send_spectrogram(slot, channel, sig, sr, n_fft, hop, f_max):
+    """Compute one slot/channel's spectrogram via the canonical module and fire a JS callback."""
     try:
         times, freqs, S_db = compute_spectrogram(sig, sr, n_fft=n_fft, hop=hop, f_max=f_max)
         if S_db.size == 0:
-            js.window.onSpecError('Signal is shorter than the FFT window — pick a smaller window size')
+            js.window.onSpecError(slot, 'Signal is shorter than the FFT window — pick a smaller window size')
             return
-        getattr(js.window, cb)(
-            to_js(times), to_js(freqs), to_js(S_db.flatten()),
+        js.window.onSpecSpectrogramResult(
+            slot, channel, to_js(times), to_js(freqs), to_js(S_db.flatten()),
             int(S_db.shape[0]), int(S_db.shape[1]),
         )
     except Exception as exc:
-        js.window.onSpecError(str(exc)[:160])
+        js.window.onSpecError(slot, str(exc)[:160])
 
 
-def _compute_all(n_fft, hop, f_max):
-    if _l_norm is None:
+def _compute_slot(slot, n_fft, hop, f_max):
+    st = _slots[slot]
+    if st['l'] is None:
         return
     n_fft, hop, f_max = int(n_fft), int(hop), float(f_max)
-    _send_spectrogram(_l_norm, _sr, n_fft, hop, f_max, 'onSpecLSpectrogramResult')
-    if _r_norm is not None:
-        _send_spectrogram(_r_norm, _sr, n_fft, hop, f_max, 'onSpecRSpectrogramResult')
+    _send_spectrogram(slot, 'l', st['l'], st['sr'], n_fft, hop, f_max)
+    if st['r'] is not None:
+        _send_spectrogram(slot, 'r', st['r'], st['sr'], n_fft, hop, f_max)
+
+
+def _store_sample(slot, sr, l, r, play_samples, n_channels, info, stereo):
+    _slots[slot]['sr'] = sr
+    _slots[slot]['l']  = l
+    _slots[slot]['r']  = r
+    js.window.onSpecSampleResult(slot, to_js(play_samples), sr, n_channels, info, stereo)
+    prefs = cfg_load('settings')
+    _compute_slot(slot, prefs['n_fft'], prefs['hop'], prefs['f_max'])
 
 
 # ── WAV loading ──────────────────────────────────────────────────────────
 
-def _load_wav(filename_js, data_js):
-    global _sr, _l_norm, _r_norm
+def _load_wav(slot_js, filename_js, data_js):
+    slot  = str(slot_js)
     fname = str(filename_js)
     try:
         raw = bytes(data_js.to_py())
@@ -97,26 +113,22 @@ def _load_wav(filename_js, data_js):
             play_samples[0::2] = f[:, 0]
             play_samples[1::2] = f[:, 1]
             n_channels = 2
-            _l_norm = f[:, 0].astype(np.float64)
-            _r_norm = f[:, 1].astype(np.float64)
+            l = f[:, 0].astype(np.float64)
+            r = f[:, 1].astype(np.float64)
         else:
             mono = f if f.ndim == 1 else f.mean(axis=1)
             play_samples = mono.astype(np.float32)
             n_channels = 1
-            _l_norm = mono.astype(np.float64)
-            _r_norm = None
-        _sr = int(sr)
+            l = mono.astype(np.float64)
+            r = None
 
         name = fname.rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
         n_frames = f.shape[0]
         info = (f'{name} · {n_frames / sr:.2f}s · {sr / 1000:.1f}kHz · '
                 f'{"stereo" if stereo else "mono"}')
-        js.window.onSpecWavResult(to_js(play_samples), _sr, n_channels, info, stereo)
-
-        prefs = cfg_load('settings')
-        _compute_all(prefs['n_fft'], prefs['hop'], prefs['f_max'])
+        _store_sample(slot, int(sr), l, r, play_samples, n_channels, info, stereo)
     except Exception as exc:
-        js.window.onSpecWavError(str(exc)[:160])
+        js.window.onSpecSampleError(slot, str(exc)[:160])
 
 
 js.window.pySpecLoadWav = create_proxy(_load_wav)
@@ -174,8 +186,8 @@ def _frf_to_complex(ext, raw):
     raise ValueError(f'.{ext} is not a supported file type')
 
 
-def _load_complex(filename_js, data_js):
-    global _sr, _l_norm, _r_norm
+def _load_complex(slot_js, filename_js, data_js):
+    slot  = str(slot_js)
     fname = str(filename_js)
     ext = fname.rsplit('.', 1)[-1].lower() if '.' in fname else ''
     try:
@@ -191,36 +203,53 @@ def _load_complex(filename_js, data_js):
         ir_len = _adaptive_ir_length(freqs, sr)
         ir = _frf_to_ir(freqs, H, sr, ir_len)   # float32, unit peak
 
-        _sr = int(sr)
-        _l_norm = ir.astype(np.float64)
-        _r_norm = None
-
         name = fname.rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
         sr_note = '' if sr_hint else ' (assumed rate)'
         info = (f'{name} · impulse response from FRF · {len(ir) / sr * 1000:.1f} ms · '
                 f'{sr / 1000:.1f}kHz{sr_note}')
-        js.window.onSpecWavResult(to_js(ir), _sr, 1, info, False)
-
-        prefs = cfg_load('settings')
-        _compute_all(prefs['n_fft'], prefs['hop'], prefs['f_max'])
+        _store_sample(slot, int(sr), ir.astype(np.float64), None, ir, 1, info, False)
     except Exception as exc:
-        js.window.onSpecWavError(str(exc)[:160])
+        js.window.onSpecSampleError(slot, str(exc)[:160])
 
 
 js.window.pySpecLoadComplex = create_proxy(_load_complex)
 
 
+# ── Finalise a mic recording into a slot (full clip, static spectrogram) ───
+# JS accumulates the complete recording client-side (from the same worklet
+# chunks used for the live preview below) and hands it over here once the
+# user stops — from this point on it's treated exactly like a loaded file.
+
+def _finalize_recording(slot_js, samples_js, sr_js):
+    slot = str(slot_js)
+    try:
+        raw = np.array(samples_js.to_py(), dtype=np.float32)
+        if raw.size == 0:
+            raise ValueError('recording was empty')
+        peak = float(np.max(np.abs(raw))) or 1.0
+        mono = (raw / peak).astype(np.float64)
+        sr = int(sr_js)
+        info = f'Mic recording · {len(mono) / sr:.2f}s · {sr / 1000:.1f}kHz · mono'
+        _store_sample(slot, sr, mono, None, mono.astype(np.float32), 1, info, False)
+    except Exception as exc:
+        js.window.onSpecSampleError(slot, str(exc)[:160])
+
+
+js.window.pySpecFinalizeRecording = create_proxy(_finalize_recording)
+
+
 # ── Recompute on FFT-setting change (no re-parse needed) ───────────────────
-# While the mic is live, _l_norm/_r_norm still hold whatever file was loaded
-# before it started — recomputing against them here would flash the *old
-# file's* spectrogram over the live one. The mic loop (_mic_push) always
-# reads fresh settings via cfg_load() on its own, so while live we only
-# need to persist the new values, not recompute a file that isn't showing.
+# While a slot is mid-recording, its live preview is driven by _mic_push
+# below (which always reads fresh settings itself) — recomputing that slot's
+# *previous* sample here would flash stale data over the live preview, so we
+# skip it and just persist the new settings.
 
 def _recompute(n_fft_js, hop_js, fmax_js):
     cfg_save('settings', {'n_fft': int(n_fft_js), 'hop': int(hop_js), 'f_max': float(fmax_js)})
-    if _mic_buf is None:
-        _compute_all(n_fft_js, hop_js, fmax_js)
+    for slot in _slots:
+        if _mic_slot == slot and _mic_buf is not None:
+            continue
+        _compute_slot(slot, n_fft_js, hop_js, fmax_js)
 
 
 js.window.pySpecRecompute = create_proxy(_recompute)
@@ -230,10 +259,12 @@ js.window.pySpecRecompute = create_proxy(_recompute)
 # Mirrors Acquire's ring-buffer pattern (Web/py/acquire_logic.py) but simpler:
 # a single fixed-length window that's always "the last N seconds," recomputed
 # with the same canonical compute_spectrogram() used everywhere else here.
+# Only one slot can be recording at a time (one physical microphone).
 
-_MIC_WINDOW_S       = 5.0
+_MIC_WINDOW_S        = 5.0
 _MIC_RECOMPUTE_EVERY = 3   # throttle: recompute every Nth push, not every push
 
+_mic_slot    = None   # 'a' | 'b' | None
 _mic_sr      = None
 _mic_size    = 0
 _mic_buf     = None   # np.ndarray float64, rolling window, oldest-first
@@ -241,8 +272,9 @@ _mic_filled  = 0
 _mic_counter = 0
 
 
-def _mic_start(sr_js):
-    global _mic_sr, _mic_size, _mic_buf, _mic_filled, _mic_counter
+def _mic_start(slot_js, sr_js):
+    global _mic_slot, _mic_sr, _mic_size, _mic_buf, _mic_filled, _mic_counter
+    _mic_slot    = str(slot_js)
     _mic_sr      = int(sr_js)
     _mic_size    = max(1, int(_MIC_WINDOW_S * _mic_sr))
     _mic_buf     = np.zeros(_mic_size, dtype=np.float64)
@@ -274,14 +306,15 @@ def _mic_push(samples_js):
 
         window = _mic_buf[-_mic_filled:] if _mic_filled < _mic_size else _mic_buf
         prefs = cfg_load('settings')
-        _send_spectrogram(window, _mic_sr, int(prefs['n_fft']), int(prefs['hop']),
-                           float(prefs['f_max']), 'onSpecLSpectrogramResult')
+        _send_spectrogram(_mic_slot, 'l', window, _mic_sr, int(prefs['n_fft']),
+                           int(prefs['hop']), float(prefs['f_max']))
     except Exception as exc:
-        js.window.onSpecError(str(exc)[:160])
+        js.window.onSpecError(_mic_slot or 'a', str(exc)[:160])
 
 
 def _mic_stop():
-    global _mic_buf, _mic_filled, _mic_counter
+    global _mic_slot, _mic_buf, _mic_filled, _mic_counter
+    _mic_slot    = None
     _mic_buf     = None
     _mic_filled  = 0
     _mic_counter = 0

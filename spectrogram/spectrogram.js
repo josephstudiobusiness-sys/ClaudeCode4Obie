@@ -5,18 +5,28 @@
  *   plotly-theme.js   — cssVar(), plotLayout(), pcfg, COL
  *   audio.js          — AudioPlayer
  *
+ * Two independent "slots" (A/B) can each be loaded from a file or recorded
+ * from the mic, so their spectrograms can be compared side by side. FFT
+ * settings (window/hop/max-freq/colorscale/freq-axis-scale) are shared
+ * across both slots so the comparison is apples-to-apples.
+ *
  * All WAV/FRF decoding and STFT computation run in Python (main.py), using
  * the canonical ObieApp fileio/processing modules. This file only manages
  * playback state, plot rendering, mic capture wiring, and UI interactions.
  * ───────────────────────────────────────────────────────────────────── */
 
-// ── Playback / channel state ──────────────────────────────────────────
-let wavSamples  = null, wavSR = 48000, wavChannels = 1, wavIsStereo = false;
-let _showChannel = 'l';   // 'l' or 'r' — which spectrogram is shown when stereo
-let _lSpecCache  = null, _rSpecCache = null;
-let _logFreq     = false;
+// ── Per-slot state ──────────────────────────────────────────────────────
+function _freshSlot() {
+  return {
+    samples: null, sr: 48000, channels: 1, isStereo: false,
+    showChannel: 'l', lCache: null, rCache: null,
+  };
+}
+const slots = { a: _freshSlot(), b: _freshSlot() };
 
-const player = new AudioPlayer({ wav: 'play-btn' });
+let _logFreq = false;
+
+const player = new AudioPlayer({ a: 'play-btn-a', b: 'play-btn-b' });
 
 // ── Plot initialisation ───────────────────────────────────────────────
 const _pcfg = { ...pcfg, toImageButtonOptions: { format: 'png', scale: 2, filename: 'spectrogram' } };
@@ -24,50 +34,53 @@ const _wl = (title, xl, yl, extra) => ({
   ...plotLayout(title, xl, yl, extra), paper_bgcolor: '#fff', plot_bgcolor: '#fff',
 });
 
-Plotly.newPlot('waveform-plot', [], _wl('Waveform', 'Time (s)', 'Amplitude'), _pcfg);
-Plotly.newPlot('spec-plot',     [], _wl('Spectrogram', 'Time (s)', 'Frequency (Hz)'), _pcfg);
+['a', 'b'].forEach(slot => {
+  Plotly.newPlot(`waveform-plot-${slot}`, [], _wl('Waveform', 'Time (s)', 'Amplitude'), _pcfg);
+  Plotly.newPlot(`spec-plot-${slot}`,     [], _wl('Spectrogram', 'Frequency (Hz)', 'Time (s)'), _pcfg);
+});
 
 // ── File loading (WAV, or FRF files IFFT'd to an impulse response) ────
-function loadFile(input) {
+function loadFile(slot, input) {
   const file = input.files[0]; if (!file) return;
-  if (_micActive) stopMic();
-  document.getElementById('wav-btn-text').textContent = file.name;
-  setSt('reading…');
+  if (_recordingSlot) stopRecording();
+  document.getElementById(`wav-btn-text-${slot}`).textContent = file.name;
+  setSt(slot, 'reading…');
   const ext = (file.name.split('.').pop() || '').toLowerCase();
   const isWav = ext === 'wav';
   const reader = new FileReader();
-  reader.onerror = () => setSt('read error', 'err');
+  reader.onerror = () => setSt(slot, 'read error', 'err');
   reader.onload  = e => {
     const fn = isWav ? window.pySpecLoadWav : window.pySpecLoadComplex;
     if (!fn) {
-      setSt('Python not ready — try again in a moment', 'err'); return;
+      setSt(slot, 'Python not ready — try again in a moment', 'err'); return;
     }
-    fn(file.name, new Uint8Array(e.target.result));
+    fn(slot, file.name, new Uint8Array(e.target.result));
   };
   reader.readAsArrayBuffer(file);
 }
 
-window.onSpecWavResult = function(samplesArr, sr, nChannels, info, stereo) {
-  wavSamples  = new Float32Array(samplesArr);
-  wavSR       = +sr;
-  wavChannels = +nChannels;
-  wavIsStereo = !!stereo;
-  setSt(info, 'ok');
-  document.getElementById('play-btn').disabled = false;
-  document.getElementById('chan-btn').style.display = wavIsStereo ? '' : 'none';
-  _showChannel = 'l';
-  updateChanBtn();
-  plotWaveform();
+window.onSpecSampleResult = function(slot, samplesArr, sr, nChannels, info, stereo) {
+  const s = slots[slot];
+  s.samples  = new Float32Array(samplesArr);
+  s.sr       = +sr;
+  s.channels = +nChannels;
+  s.isStereo = !!stereo;
+  s.showChannel = 'l';
+  setSt(slot, info, 'ok');
+  document.getElementById(`play-btn-${slot}`).disabled = false;
+  document.getElementById(`chan-btn-${slot}`).style.display = s.isStereo ? '' : 'none';
+  updateChanBtn(slot);
+  plotWaveform(slot);
 };
 
-window.onSpecWavError = function(msg) {
-  wavSamples = null;
-  document.getElementById('play-btn').disabled = true;
-  setSt('error: ' + msg, 'err');
+window.onSpecSampleError = function(slot, msg) {
+  slots[slot].samples = null;
+  document.getElementById(`play-btn-${slot}`).disabled = true;
+  setSt(slot, 'error: ' + msg, 'err');
 };
 
-window.onSpecError = function(msg) {
-  setSt('error: ' + msg, 'err');
+window.onSpecError = function(slot, msg) {
+  setSt(slot, 'error: ' + msg, 'err');
 };
 
 // ── Spectrogram unpack / render ────────────────────────────────────────
@@ -80,13 +93,11 @@ function _unpackSpec(times_js, freqs_js, flatZ_js, nFreqs, nTimes) {
   return { times, freqs, zDb };
 }
 
-window.onSpecLSpectrogramResult = function(times_js, freqs_js, flatZ_js, nFreqs, nTimes) {
-  _lSpecCache = _unpackSpec(times_js, freqs_js, flatZ_js, nFreqs, nTimes);
-  if (_showChannel === 'l') renderSpec();
-};
-window.onSpecRSpectrogramResult = function(times_js, freqs_js, flatZ_js, nFreqs, nTimes) {
-  _rSpecCache = _unpackSpec(times_js, freqs_js, flatZ_js, nFreqs, nTimes);
-  if (_showChannel === 'r') renderSpec();
+window.onSpecSpectrogramResult = function(slot, channel, times_js, freqs_js, flatZ_js, nFreqs, nTimes) {
+  const s = slots[slot];
+  const cache = _unpackSpec(times_js, freqs_js, flatZ_js, nFreqs, nTimes);
+  if (channel === 'r') s.rCache = cache; else s.lCache = cache;
+  if (s.showChannel === channel) renderSpec(slot);
 };
 
 // zDb from _unpackSpec is (nFreqBins rows × nTimeFrames cols) — transpose so
@@ -102,50 +113,50 @@ function _transpose(z) {
   return t;
 }
 
-function renderSpec() {
-  const cache = _showChannel === 'r' ? _rSpecCache : _lSpecCache;
+function renderSpec(slot) {
+  const s = slots[slot];
+  const cache = s.showChannel === 'r' ? s.rCache : s.lCache;
   if (!cache) return;
   const { times, freqs, zDb } = cache;
   const colorscale = document.getElementById('colorscale-sel').value;
-  const label = _micActive ? ' · Live'
-    : wavIsStereo ? (_showChannel === 'r' ? ' · R channel' : ' · L channel') : '';
-  Plotly.react('spec-plot', [{
+  const label = _recordingSlot === slot ? ' · Live'
+    : s.isStereo ? (s.showChannel === 'r' ? ' · R channel' : ' · L channel') : '';
+  Plotly.react(`spec-plot-${slot}`, [{
     x: freqs, y: times, z: _transpose(zDb),
     type: 'heatmap', colorscale, showscale: true,
     colorbar: { title: 'dB', titleside: 'right', thickness: 10, len: 0.95, tickfont: { size: 9 } },
     zsmooth: 'fast', hoverinfo: 'skip',
   }], _wl('Spectrogram' + label, 'Frequency (Hz)', 'Time (s)', {
-    margin: { l: 55, r: 55, t: 28, b: 38 },
+    margin: { l: 50, r: 45, t: 26, b: 34 },
     xaxis: { type: _logFreq ? 'log' : 'linear' },
   }), _pcfg);
-  renderFrameInfo(times, freqs);
+  renderFrameInfo(slot, times, freqs);
 }
 
-function renderFrameInfo(times, freqs) {
-  const el = document.getElementById('frame-info');
+function renderFrameInfo(slot, times, freqs) {
+  const el = document.getElementById(`frame-info-${slot}`);
   if (!times.length || !freqs.length) { el.textContent = '–'; return; }
   const dt = times.length > 1 ? times[1] - times[0] : 0;
   const df = freqs.length > 1 ? freqs[1] - freqs[0] : 0;
   el.textContent =
-    `${times.length} frames × ${freqs.length} bins\n` +
-    `${(dt * 1000).toFixed(1)} ms/frame\n` +
-    `${df.toFixed(1)} Hz/bin`;
+    `${times.length}×${freqs.length} (t×f)  ·  ${(dt * 1000).toFixed(1)} ms/frame  ·  ${df.toFixed(1)} Hz/bin`;
 }
 
-function plotWaveform() {
-  if (!wavSamples) return;
-  const stride = wavIsStereo ? 2 : 1;
-  const n = Math.floor(wavSamples.length / stride);
-  const step = Math.max(1, Math.floor(n / 5000));
+function plotWaveform(slot) {
+  const s = slots[slot];
+  if (!s.samples) return;
+  const stride = s.isStereo ? 2 : 1;
+  const n = Math.floor(s.samples.length / stride);
+  const step = Math.max(1, Math.floor(n / 4000));
   const x = [], y = [];
-  for (let i = 0; i < n; i += step) { x.push(i / wavSR); y.push(wavSamples[i * stride]); }
-  Plotly.react('waveform-plot', [{
+  for (let i = 0; i < n; i += step) { x.push(i / s.sr); y.push(s.samples[i * stride]); }
+  Plotly.react(`waveform-plot-${slot}`, [{
     x, y, type: 'scatter', mode: 'lines',
     line: { color: COL.wav, width: 1 }, showlegend: false,
   }], _wl('Waveform', 'Time (s)', 'Amplitude'), _pcfg);
 }
 
-// ── Settings ──────────────────────────────────────────────────────────
+// ── Settings (shared across both slots) ────────────────────────────────
 function specSettingsChanged() {
   const nFft = +document.getElementById('n-fft-sel').value;
   let hop = +document.getElementById('hop-sel').value;
@@ -159,18 +170,20 @@ function specSettingsChanged() {
 }
 
 function specRenderAll() {
-  renderSpec();
+  renderSpec('a');
+  renderSpec('b');
 }
 
-function updateChanBtn() {
-  const btn = document.getElementById('chan-btn');
-  btn.textContent = _showChannel === 'l' ? 'Show R ▶' : '◀ Show L';
+function updateChanBtn(slot) {
+  const btn = document.getElementById(`chan-btn-${slot}`);
+  btn.textContent = slots[slot].showChannel === 'l' ? 'Show R ▶' : '◀ Show L';
 }
 
-window.specToggleChannel = function() {
-  _showChannel = _showChannel === 'l' ? 'r' : 'l';
-  updateChanBtn();
-  renderSpec();
+window.specToggleChannel = function(slot) {
+  const s = slots[slot];
+  s.showChannel = s.showChannel === 'l' ? 'r' : 'l';
+  updateChanBtn(slot);
+  renderSpec(slot);
 };
 
 window.specToggleFreqScale = function() {
@@ -178,14 +191,16 @@ window.specToggleFreqScale = function() {
   const btn = document.getElementById('freq-scale-btn');
   btn.textContent = _logFreq ? 'Freq: Log' : 'Freq: Lin';
   btn.classList.toggle('active', _logFreq);
-  renderSpec();
+  specRenderAll();
 };
 
-// ── Live microphone ─────────────────────────────────────────────────────
+// ── Live microphone recording ──────────────────────────────────────────
 // Mirrors Acquire's AudioWorkletNode capture pattern (Web/tools/acquire/acquire.js):
-// an inline worklet posts raw Float32 audio, batched here and pushed to Python
-// (pySpecMicPush) which keeps a rolling window and recomputes the spectrogram
-// with the same canonical compute_spectrogram() used for files.
+// an inline worklet posts raw Float32 audio. Chunks are (a) batched and pushed to
+// Python (pySpecMicPush) for a live rolling-window preview, using the same canonical
+// compute_spectrogram() as everywhere else, and (b) kept in full so that on Stop the
+// complete clip becomes that slot's sample (pySpecFinalizeRecording), just like a
+// loaded file. Only one slot can record at a time — there's one physical microphone.
 const MIC_WORKLET_SRC = `
 class SpecCaptureProcessor extends AudioWorkletProcessor {
   process(inputs) {
@@ -198,12 +213,13 @@ registerProcessor('spec-capture', SpecCaptureProcessor);
 `;
 const MIC_BATCH_SIZE = 4096;
 
-let _micActive = false;
+let _recordingSlot = null;
 let _micStream = null, _micCtx = null, _micSource = null, _micWorklet = null;
 let _micBatch = null, _micBatchFill = 0;
+let _micFullChunks = [], _micFullLen = 0, _micSr = 48000;
 
-async function startMic() {
-  if (_micActive) return;
+async function startRecording(slot) {
+  if (_recordingSlot) return;
   try {
     _micStream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
@@ -215,8 +231,11 @@ async function startMic() {
     _micWorklet = new AudioWorkletNode(_micCtx, 'spec-capture', { numberOfInputs: 1, numberOfOutputs: 0 });
     _micBatch = new Float32Array(MIC_BATCH_SIZE);
     _micBatchFill = 0;
+    _micFullChunks = []; _micFullLen = 0;
+    _micSr = _micCtx.sampleRate;
     _micWorklet.port.onmessage = e => {
       const chunk = e.data;
+      _micFullChunks.push(chunk); _micFullLen += chunk.length;
       let off = 0;
       while (off < chunk.length) {
         const room = MIC_BATCH_SIZE - _micBatchFill;
@@ -231,49 +250,71 @@ async function startMic() {
     };
     _micSource.connect(_micWorklet);
 
-    if (window.pySpecMicStart) window.pySpecMicStart(_micCtx.sampleRate);
-    _micActive = true;
-    _enterMicMode();
+    if (window.pySpecMicStart) window.pySpecMicStart(slot, _micSr);
+    _recordingSlot = slot;
+    _enterRecordingUI(slot);
   } catch (e) {
-    setSt('mic error: ' + e.message.slice(0, 60), 'err');
-    stopMic();
+    setSt(slot, 'mic error: ' + e.message.slice(0, 60), 'err');
+    stopRecording();
   }
 }
 
-function stopMic() {
+function stopRecording() {
+  const slot = _recordingSlot;
+  if (!slot) return;
   if (_micSource)  { try { _micSource.disconnect(); }  catch (_) {} _micSource  = null; }
   if (_micWorklet) { try { _micWorklet.disconnect(); } catch (_) {} _micWorklet = null; }
   if (_micStream)  { _micStream.getTracks().forEach(t => t.stop()); _micStream = null; }
   if (_micCtx)     { _micCtx.close().catch(() => {}); _micCtx = null; }
-  const wasActive = _micActive;
-  _micActive = false;
-  if (wasActive && window.pySpecMicStop) window.pySpecMicStop();
-  _exitMicMode();
+  if (window.pySpecMicStop) window.pySpecMicStop();
+
+  const full = new Float32Array(_micFullLen);
+  let off = 0;
+  for (const c of _micFullChunks) { full.set(c, off); off += c.length; }
+  _micFullChunks = []; _micFullLen = 0;
+
+  _recordingSlot = null;
+  _exitRecordingUI(slot);
+
+  if (full.length > 0 && window.pySpecFinalizeRecording) {
+    setSt(slot, 'processing recording…');
+    window.pySpecFinalizeRecording(slot, full, _micSr);
+  } else {
+    setSt(slot, 'no audio captured', 'err');
+  }
 }
 
-window.specToggleMic = function() {
-  if (_micActive) stopMic(); else startMic();
+window.specToggleRecord = function(slot) {
+  if (_recordingSlot === slot) stopRecording();
+  else if (!_recordingSlot) startRecording(slot);
 };
 
-function _enterMicMode() {
-  const btn = document.getElementById('mic-btn');
-  btn.textContent = '⏹ Stop Mic';
+function _enterRecordingUI(slot) {
+  const other = slot === 'a' ? 'b' : 'a';
+  const btn = document.getElementById(`mic-btn-${slot}`);
+  btn.textContent = '⏹ Stop';
   btn.classList.add('recording');
-  document.getElementById('file-btn-label').style.display = 'none';
-  document.getElementById('play-btn').disabled = true;
-  document.getElementById('chan-btn').style.display = 'none';
-  _showChannel = 'l';
-  wavSamples = null;
-  Plotly.react('waveform-plot', [], _wl('Waveform — not shown in Live Mic mode', 'Time (s)', 'Amplitude'), _pcfg);
-  setSt('listening…', 'ok');
+  document.getElementById(`file-btn-label-${slot}`).style.display = 'none';
+  document.getElementById(`mic-btn-${other}`).disabled = true;
+  document.getElementById(`play-btn-${slot}`).disabled = true;
+  document.getElementById(`chan-btn-${slot}`).style.display = 'none';
+  // Recordings are mono (channel 'l' only) — if this slot was showing a
+  // stereo file's R channel, reset to 'l' or the live preview would never
+  // render (onSpecSpectrogramResult only renders when channel === showChannel).
+  slots[slot].samples = null;
+  slots[slot].showChannel = 'l';
+  slots[slot].rCache = null;
+  Plotly.react(`waveform-plot-${slot}`, [], _wl('Waveform — shown once recording stops', 'Time (s)', 'Amplitude'), _pcfg);
+  setSt(slot, 'listening…', 'ok');
 }
 
-function _exitMicMode() {
-  const btn = document.getElementById('mic-btn');
-  btn.textContent = '🎤 Live Mic';
+function _exitRecordingUI(slot) {
+  const other = slot === 'a' ? 'b' : 'a';
+  const btn = document.getElementById(`mic-btn-${slot}`);
+  btn.textContent = '🎤 Record';
   btn.classList.remove('recording');
-  document.getElementById('file-btn-label').style.display = '';
-  setSt('mic stopped');
+  document.getElementById(`file-btn-label-${slot}`).style.display = '';
+  document.getElementById(`mic-btn-${other}`).disabled = false;
 }
 
 // ── Preferences modal ────────────────────────────────────────────────
@@ -295,13 +336,14 @@ window.specResetPrefs = function() {
   document.getElementById('fmax-inp').value = '8000';
   document.getElementById('colorscale-sel').value = 'Plasma';
   specSettingsChanged();
-  renderSpec();
+  specRenderAll();
 };
 
 // ── Playback ──────────────────────────────────────────────────────────
-function togglePlay() {
-  if (!wavSamples) return;
-  player.toggle('wav', wavSamples, wavSR, wavIsStereo ? 2 : 1);
+function togglePlay(slot) {
+  const s = slots[slot];
+  if (!s.samples) return;
+  player.toggle(slot, s.samples, s.sr, s.isStereo ? 2 : 1);
 }
 
 // ── Help ──────────────────────────────────────────────────────────────
@@ -310,16 +352,14 @@ window.specHelp = function() {
 };
 
 // ── UI helpers ────────────────────────────────────────────────────────
-function setSt(txt, cls) {
-  const el = document.getElementById('wav-status');
+function setSt(slot, txt, cls) {
+  const el = document.getElementById(`wav-status-${slot}`);
   el.textContent = txt;
-  el.className = 'sp-status-txt' + (cls ? ' ' + cls : '');
-  document.getElementById('wav-info').textContent = txt;
+  el.className = 'sp-panel-status' + (cls ? ' ' + cls : '');
 }
 
 // Python signals ready. Restore saved FFT settings (from localStorage via config.py).
 window.onPythonReady = function() {
-  setSt('no file loaded');
   const s = window.obieSpecSettings;
   if (s) {
     if (s.n_fft) document.getElementById('n-fft-sel').value = String(s.n_fft);
@@ -344,7 +384,7 @@ function _initResizer() {
     if (!dragging) return;
     const w = Math.max(160, Math.min(360, startW + (e.clientX - startX)));
     sidebar.style.width = w + 'px';
-    ['waveform-plot', 'spec-plot'].forEach(id => {
+    ['waveform-plot-a', 'spec-plot-a', 'waveform-plot-b', 'spec-plot-b'].forEach(id => {
       const el = document.getElementById(id);
       if (el) Plotly.Plots.resize(el);
     });
@@ -367,4 +407,4 @@ document.addEventListener('click', e => {
 document.addEventListener('DOMContentLoaded', () => {
   _initResizer();
 });
-window.addEventListener('beforeunload', () => { if (_micActive) stopMic(); });
+window.addEventListener('beforeunload', () => { if (_recordingSlot) stopRecording(); });
