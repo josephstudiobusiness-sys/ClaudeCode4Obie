@@ -44,10 +44,13 @@
 
   <!-- ── Toolbar ─────────────────────────────────────────────────────── -->
   <div class="sp-toolbar">
-    <label class="file-btn" style="width:auto">
-      <span id="wav-btn-text">📂 Load WAV</span>
-      <input type="file" id="wav-input" accept=".wav,audio/wav,audio/*" onchange="loadWAV(this)">
+    <label class="file-btn" id="file-btn-label" style="width:auto"
+           title="WAV (audio) or TRF/TRV/AvC/AvR/CSV/MAT (FRF — IFFT'd to an impulse response)">
+      <span id="wav-btn-text">📂 Load File</span>
+      <input type="file" id="wav-input" accept=".wav,.trf,.trv,.avc,.avr,.csv,.mat,audio/wav,audio/*"
+             onchange="loadFile(this)">
     </label>
+    <button id="mic-btn" class="tb-btn" onclick="specToggleMic()" title="Live spectrogram from your microphone">🎤 Live Mic</button>
     <span id="wav-status" class="sp-status-txt">no file loaded</span>
     <button id="play-btn" class="tb-btn accent" data-label="WAV" onclick="togglePlay()" disabled>▶ Play</button>
     <div class="tb-flex"></div>
@@ -64,7 +67,7 @@
     <div class="sp-sidebar">
       <div class="sp-sect">ℹ File</div>
       <div class="sp-content">
-        <div class="fileinfo" id="wav-info">Load a WAV file to begin.</div>
+        <div class="fileinfo" id="wav-info">Load a WAV file, an FRF file (TRF/TRV/AvC/AvR/CSV/MAT — shown as its impulse response), or start Live Mic.</div>
       </div>
 
       <div class="sp-sect">⚙️ FFT Settings</div>

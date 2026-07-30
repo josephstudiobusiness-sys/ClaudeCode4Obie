@@ -62,6 +62,11 @@ header.obie-header .gap { flex: 1; }
 .tb-btn.accent { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .tb-btn.accent:hover:not(:disabled) { background: var(--accent-2); border-color: var(--accent-2); }
 .tb-btn.active { background: #d0d8e8; border-color: #7090b8; color: #1a2a50; font-weight: 600; }
+.tb-btn.recording {
+  background: var(--red); border-color: var(--red); color: #fff; font-weight: 600;
+  animation: sp-pulse 1.4s ease-in-out infinite;
+}
+@keyframes sp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.65; } }
 
 .file-btn {
   display: inline-flex; align-items: center;

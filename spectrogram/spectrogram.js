@@ -5,10 +5,9 @@
  *   plotly-theme.js   — cssVar(), plotLayout(), pcfg, COL
  *   audio.js          — AudioPlayer
  *
- * All WAV decoding and STFT computation run in Python (main.py), using the
- * canonical Python/fileio/wavfileio.py and Python/processing/spectrogram.py
- * modules from ObieApp. This file only manages playback state, plot
- * rendering, and UI interactions.
+ * All WAV/FRF decoding and STFT computation run in Python (main.py), using
+ * the canonical ObieApp fileio/processing modules. This file only manages
+ * playback state, plot rendering, mic capture wiring, and UI interactions.
  * ───────────────────────────────────────────────────────────────────── */
 
 // ── Playback / channel state ──────────────────────────────────────────
@@ -28,18 +27,22 @@ const _wl = (title, xl, yl, extra) => ({
 Plotly.newPlot('waveform-plot', [], _wl('Waveform', 'Time (s)', 'Amplitude'), _pcfg);
 Plotly.newPlot('spec-plot',     [], _wl('Spectrogram', 'Time (s)', 'Frequency (Hz)'), _pcfg);
 
-// ── WAV loading ───────────────────────────────────────────────────────
-function loadWAV(input) {
+// ── File loading (WAV, or FRF files IFFT'd to an impulse response) ────
+function loadFile(input) {
   const file = input.files[0]; if (!file) return;
+  if (_micActive) stopMic();
   document.getElementById('wav-btn-text').textContent = file.name;
   setSt('reading…');
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  const isWav = ext === 'wav';
   const reader = new FileReader();
   reader.onerror = () => setSt('read error', 'err');
   reader.onload  = e => {
-    if (!window.pySpecLoadWav) {
+    const fn = isWav ? window.pySpecLoadWav : window.pySpecLoadComplex;
+    if (!fn) {
       setSt('Python not ready — try again in a moment', 'err'); return;
     }
-    window.pySpecLoadWav(file.name, new Uint8Array(e.target.result));
+    fn(file.name, new Uint8Array(e.target.result));
   };
   reader.readAsArrayBuffer(file);
 }
@@ -86,20 +89,34 @@ window.onSpecRSpectrogramResult = function(times_js, freqs_js, flatZ_js, nFreqs,
   if (_showChannel === 'r') renderSpec();
 };
 
+// zDb from _unpackSpec is (nFreqBins rows × nTimeFrames cols) — transpose so
+// frequency runs along x (horizontal spread) and time runs along y (height).
+function _transpose(z) {
+  const nRows = z.length, nCols = z[0].length;
+  const t = new Array(nCols);
+  for (let j = 0; j < nCols; j++) {
+    const row = new Array(nRows);
+    for (let i = 0; i < nRows; i++) row[i] = z[i][j];
+    t[j] = row;
+  }
+  return t;
+}
+
 function renderSpec() {
   const cache = _showChannel === 'r' ? _rSpecCache : _lSpecCache;
   if (!cache) return;
   const { times, freqs, zDb } = cache;
   const colorscale = document.getElementById('colorscale-sel').value;
-  const label = wavIsStereo ? (_showChannel === 'r' ? ' · R channel' : ' · L channel') : '';
+  const label = _micActive ? ' · Live'
+    : wavIsStereo ? (_showChannel === 'r' ? ' · R channel' : ' · L channel') : '';
   Plotly.react('spec-plot', [{
-    x: times, y: freqs, z: zDb,
+    x: freqs, y: times, z: _transpose(zDb),
     type: 'heatmap', colorscale, showscale: true,
     colorbar: { title: 'dB', titleside: 'right', thickness: 10, len: 0.95, tickfont: { size: 9 } },
     zsmooth: 'fast', hoverinfo: 'skip',
-  }], _wl('Spectrogram' + label, 'Time (s)', 'Frequency (Hz)', {
+  }], _wl('Spectrogram' + label, 'Frequency (Hz)', 'Time (s)', {
     margin: { l: 55, r: 55, t: 28, b: 38 },
-    yaxis: { type: _logFreq ? 'log' : 'linear' },
+    xaxis: { type: _logFreq ? 'log' : 'linear' },
   }), _pcfg);
   renderFrameInfo(times, freqs);
 }
@@ -163,6 +180,101 @@ window.specToggleFreqScale = function() {
   btn.classList.toggle('active', _logFreq);
   renderSpec();
 };
+
+// ── Live microphone ─────────────────────────────────────────────────────
+// Mirrors Acquire's AudioWorkletNode capture pattern (Web/tools/acquire/acquire.js):
+// an inline worklet posts raw Float32 audio, batched here and pushed to Python
+// (pySpecMicPush) which keeps a rolling window and recomputes the spectrogram
+// with the same canonical compute_spectrogram() used for files.
+const MIC_WORKLET_SRC = `
+class SpecCaptureProcessor extends AudioWorkletProcessor {
+  process(inputs) {
+    const inp = inputs[0];
+    if (inp && inp[0] && inp[0].length > 0) this.port.postMessage(inp[0].slice());
+    return true;
+  }
+}
+registerProcessor('spec-capture', SpecCaptureProcessor);
+`;
+const MIC_BATCH_SIZE = 4096;
+
+let _micActive = false;
+let _micStream = null, _micCtx = null, _micSource = null, _micWorklet = null;
+let _micBatch = null, _micBatchFill = 0;
+
+async function startMic() {
+  if (_micActive) return;
+  try {
+    _micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+    _micCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const blobUrl = URL.createObjectURL(new Blob([MIC_WORKLET_SRC], { type: 'application/javascript' }));
+    await _micCtx.audioWorklet.addModule(blobUrl);
+    _micSource  = _micCtx.createMediaStreamSource(_micStream);
+    _micWorklet = new AudioWorkletNode(_micCtx, 'spec-capture', { numberOfInputs: 1, numberOfOutputs: 0 });
+    _micBatch = new Float32Array(MIC_BATCH_SIZE);
+    _micBatchFill = 0;
+    _micWorklet.port.onmessage = e => {
+      const chunk = e.data;
+      let off = 0;
+      while (off < chunk.length) {
+        const room = MIC_BATCH_SIZE - _micBatchFill;
+        const take = Math.min(room, chunk.length - off);
+        _micBatch.set(chunk.subarray(off, off + take), _micBatchFill);
+        _micBatchFill += take; off += take;
+        if (_micBatchFill >= MIC_BATCH_SIZE) {
+          if (window.pySpecMicPush) window.pySpecMicPush(_micBatch.slice());
+          _micBatchFill = 0;
+        }
+      }
+    };
+    _micSource.connect(_micWorklet);
+
+    if (window.pySpecMicStart) window.pySpecMicStart(_micCtx.sampleRate);
+    _micActive = true;
+    _enterMicMode();
+  } catch (e) {
+    setSt('mic error: ' + e.message.slice(0, 60), 'err');
+    stopMic();
+  }
+}
+
+function stopMic() {
+  if (_micSource)  { try { _micSource.disconnect(); }  catch (_) {} _micSource  = null; }
+  if (_micWorklet) { try { _micWorklet.disconnect(); } catch (_) {} _micWorklet = null; }
+  if (_micStream)  { _micStream.getTracks().forEach(t => t.stop()); _micStream = null; }
+  if (_micCtx)     { _micCtx.close().catch(() => {}); _micCtx = null; }
+  const wasActive = _micActive;
+  _micActive = false;
+  if (wasActive && window.pySpecMicStop) window.pySpecMicStop();
+  _exitMicMode();
+}
+
+window.specToggleMic = function() {
+  if (_micActive) stopMic(); else startMic();
+};
+
+function _enterMicMode() {
+  const btn = document.getElementById('mic-btn');
+  btn.textContent = '⏹ Stop Mic';
+  btn.classList.add('recording');
+  document.getElementById('file-btn-label').style.display = 'none';
+  document.getElementById('play-btn').disabled = true;
+  document.getElementById('chan-btn').style.display = 'none';
+  _showChannel = 'l';
+  wavSamples = null;
+  Plotly.react('waveform-plot', [], _wl('Waveform — not shown in Live Mic mode', 'Time (s)', 'Amplitude'), _pcfg);
+  setSt('listening…', 'ok');
+}
+
+function _exitMicMode() {
+  const btn = document.getElementById('mic-btn');
+  btn.textContent = '🎤 Live Mic';
+  btn.classList.remove('recording');
+  document.getElementById('file-btn-label').style.display = '';
+  setSt('mic stopped');
+}
 
 // ── Preferences modal ────────────────────────────────────────────────
 window.specPreferences = function() {
@@ -255,3 +367,4 @@ document.addEventListener('click', e => {
 document.addEventListener('DOMContentLoaded', () => {
   _initResizer();
 });
+window.addEventListener('beforeunload', () => { if (_micActive) stopMic(); });
