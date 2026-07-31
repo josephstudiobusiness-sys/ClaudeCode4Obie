@@ -4,10 +4,11 @@ A standalone, browser-based spectrogram viewer built with PyScript + Plotly,
 following the ObieWebApp look & feel (see
 [ObieApp/CLAUDE.md](https://github.com/chrisbuerginrogers/ObieApp/blob/main/CLAUDE.md)).
 
-The tool shows **two samples — Sample A and Sample B** — loaded independently,
-in one of two ways:
+Files pile up in a **numbered list in the left sidebar**, Explore-style —
+load as many as you like (or record from the mic), then pick what to do
+with them:
 
-- **Load a file**:
+- **Load a file** (📂 Load, top of the sidebar — pick one or several at once):
   - `.wav` — decoded directly by the canonical `wavfileio.py`.
   - `.mp3` — scipy (which `wavfileio.py` uses) can't read MP3, so it's
     decoded client-side first via the browser's own Web Audio decoder
@@ -20,38 +21,45 @@ in one of two ways:
     phase, e.g. TRF `fComplex=1/2` or AvC; minimum-phase estimated otherwise)
     and shows *that* impulse response's spectrogram.
 
-  All of these support stereo, with an L/R channel toggle and playback via
-  the browser's `AudioContext`.
-- **Record from the mic** — click Record on either sample to capture live
-  audio; the spectrogram updates in real time (rolling 5 s window) while
-  recording, and on Stop the full clip becomes that sample's static
-  spectrogram, ready to compare against the other side. Only one sample can
-  record at a time (one physical microphone) — the other side's Record
-  button is disabled meanwhile.
+  All of these support stereo, with an L/R channel toggle (per sidebar row)
+  and playback via the browser's `AudioContext`.
+- **Record from the mic** (🎤 Record, top of the sidebar) — capture live
+  audio into a new numbered row; the spectrogram updates in real time
+  (rolling 5 s window) while recording, and on Stop the full clip becomes
+  that row's static sample. Only one recording can run at a time (one
+  physical microphone).
+
+Each sidebar row carries everything about that file: a checkbox (Compare
+selection), the number/name (click the name to focus it in Single view), a
+▶ play button, an L/R channel chip when stereo, ①/② buttons (Difference/
+Mirror pairing — see below), and a ✕ to remove it.
 
 Four view modes, via the toolbar:
 
-- **🔎 Single** (default) — just one sample, full width (a "Sample A / Sample
-  B" toggle picks which). Reuses the same panels as Compare — no separate
-  plots to keep in sync, it's a pure layout toggle.
-- **🆚 Compare** — Sample A and Sample B side by side.
+- **🔎 Single** (default) — just the *focused* file, full width. Click any
+  filename in the sidebar to focus it.
+- **🆚 Compare** — every file whose sidebar checkbox is ticked, stacked as
+  **rows**, up to **4 at a time**. Ticking a 5th box while 4 are already
+  selected is a no-op — untick one first.
 - **⛰ Difference** — see below.
 - **🎙 Live** — see "Live view" below.
 
-FFT window size, hop size, max frequency, **frequency smoothing**, colorscale,
-and the frequency-axis scale are all adjustable in the sidebar and apply to
-**both** samples, so the comparison is apples-to-apples.
+FFT window size, hop size, max frequency, **frequency smoothing**, and
+colorscale live in the **⚙️ FFT Settings** button (top right) and apply to
+**every loaded file**, so any comparison is apples-to-apples. The **View**
+selector next to it (labelled with the current plot type, e.g. "Heatmap")
+picks how spectrograms are drawn — see "View modes" below — and **ℹ** opens
+a quick how-to-use popup.
 
-Sample A and Sample B are each drawn in their own Plotly figure, so left to
-their defaults they'd colour-scale independently — the hottest colour in A's
-panel could mean a completely different dB than the hottest colour in B's.
-To keep them genuinely comparable, whenever both samples are loaded, Heatmap
-and 3D Surface (colour *and* height) share one intensity range — the combined
-min/max of both samples — instead of each auto-scaling to its own data. This
-also holds for Mirror-by-time's two side-by-side heatmaps, and for Single
-mode's Sample A ↔ Sample B toggle, so the scale doesn't jump when you switch
-which one is showing. The Difference view's own colour range (zero-centred
-on ΔdB) is unaffected — that's a separate, already-shared computation.
+Every currently-shown panel is its own Plotly figure, so left to their
+defaults they'd colour-scale independently — the hottest colour in one
+panel could mean a completely different dB than the hottest colour in
+another. To keep them genuinely comparable, whenever 2+ panels are shown at
+once (Compare rows, or either side of Mirror-by-time), Heatmap and 3D
+Surface (colour *and* height) share one intensity range — the combined
+min/max across all of them — instead of each auto-scaling to its own data.
+The Difference view's own colour range (zero-centred on ΔdB) is unaffected
+— that's a separate, already-shared computation.
 
 ### Frequency smoothing
 
@@ -61,13 +69,13 @@ smoothing control — same ratio-based algorithm (`freqs[i]/ratio` to
 `freqs[i]*ratio`, `ratio = 2^(semitones/12)`), just adapted to run across an
 entire spectrogram matrix (every time frame) at once via a cumulative-sum
 range query per bin, rather than one freq/mag curve at a time. Applies
-everywhere: Sample A, Sample B, and the Difference view (smoothed *before*
+everywhere: every loaded file, and the Difference view (smoothed *before*
 subtracting, so the diff doesn't inherit narrow-band noise from either side).
 
 ### View modes
 
-A **Plot type** selector (sidebar) switches how any spectrogram is drawn —
-Sample A, Sample B, or the Difference view:
+The **View** selector (toolbar, top right) switches how any spectrogram is
+drawn — every panel (Single/Compare) and the Difference view:
 
 - **Heatmap** (default) — X=time, Y=frequency, colour=dB — the usual
   spectrogram layout (time scrolling left→right, frequency bottom→top).
@@ -80,58 +88,62 @@ Sample A, Sample B, or the Difference view:
   readability), colour-graded early→late. Frequency stays on X here — a
   waterfall isn't a time/frequency grid, each line *is* one time slice, so
   there's no "which axis is time" to flip.
-- **Mirror (A | B)** — *Difference view only.* Rather than subtracting A
-  from B, this shows both samples' own spectrograms directly, arranged
-  around a centre line/plane, so you compare shapes visually instead of (or
+- **Mirror (① | ②)** — *Difference view only.* Rather than subtracting ①
+  from ②, this shows both files' own spectrograms directly, arranged around
+  a centre line/plane, so you compare shapes visually instead of (or
   alongside) reading a computed difference. Two independent toolbar toggles
   (visible only in this mode) control how:
   - **Mirror: Independent / Signed Diff** — what's actually plotted.
-    **Independent** (default) shows each sample's own values, unrelated to
+    **Independent** (default) shows each file's own values, unrelated to
     each other — good for comparing overall shape/timbre. **Signed Diff**
-    shows a true `A − B` subtraction instead — the same computation as the
+    shows a true `① − ②` subtraction instead — the same computation as the
     numeric Difference view (interpolated onto a shared grid), just routed
     through Mirror's layout.
   - **Mirror: Flat / 3D Surface** — 2D chart vs literal 3D terrain.
     **Flat** (default) draws a 2D chart, and a second toggle, **Mirror:
     Frequency / Time**, then picks which axis is shared:
     - **Frequency** — a population-pyramid-style plot: Y=frequency (shared),
-      and for each bin a filled line extends left for Sample A, right for
-      Sample B (red/blue, matching the Difference legend). Time is
-      collapsed to a mean (Independent: each sample's own average; Signed
-      Diff: `avg(A) − avg(B)` per frequency bin, split left/right by sign).
+      and for each bin a filled line extends left for ①, right for ②
+      (red/blue, matching the Difference legend). Time is collapsed to a
+      mean (Independent: each file's own average; Signed Diff: `avg(①) −
+      avg(②)` per frequency bin, split left/right by sign).
     - **Time** — X=time (shared), and each side is a full heatmap with
-      frequency (Y) increasing outward from the centre line — Sample A
-      mirrored below, Sample B normal above. Linear frequency axis only
-      here (log is undefined for the negative/mirrored side), and no
-      Independent/Signed-Diff distinction (a per-(time,freq) mirrored
-      heatmap doesn't have the same single-value-per-point ambiguity the
-      frequency-axis pyramid does).
+      frequency (Y) increasing outward from the centre line — ① mirrored
+      below, ② normal above. Linear frequency axis only here (log is
+      undefined for the negative/mirrored side), and no Independent/Signed-
+      Diff distinction (a per-(time,freq) mirrored heatmap doesn't have the
+      same single-value-per-point ambiguity the frequency-axis pyramid does).
 
     **3D Surface** ignores the Frequency/Time axis choice — a literal
     surface doesn't need 2D's left-right/top-bottom trick to visually
-    separate A and B, since overlap plus rotation already does that job.
+    separate ① and ②, since overlap plus rotation already does that job.
     Independent renders **two semi-transparent surfaces** overlaid in one
-    scene (Sample A red, Sample B blue, X=time/Y=frequency/Z=dB) — the
-    whole time-resolved terrain for each sample, not just a time-averaged
-    snapshot, so you can rotate around to see exactly where one pokes above
-    the other. Signed Diff renders **one surface** — reusing the exact same
-    full-resolution `A − B` grid the numeric Difference view's own 3D
-    Surface uses (not a separate computation), so switching to Mirror's 3D
-    Signed Diff and to ⛰ Difference → Plot type: 3D Surface show identical
-    data, just reached two different ways.
+    scene (① red, ② blue, X=time/Y=frequency/Z=dB) — the whole time-resolved
+    terrain for each file, not just a time-averaged snapshot, so you can
+    rotate around to see exactly where one pokes above the other. Signed
+    Diff renders **one surface** — reusing the exact same full-resolution
+    `① − ②` grid the numeric Difference view's own 3D Surface uses (not a
+    separate computation), so switching to Mirror's 3D Signed Diff and to
+    ⛰ Difference → Plot type: 3D Surface show identical data, just reached
+    two different ways.
 
 ### Difference mode
 
-Toggle **⛰ Difference** (top toolbar) to see Sample A's spectrogram minus
-Sample B's as one plot — peaks where A is louder than B, valleys where B is
-louder, using a zero-centred diverging colorscale (RdBu, reversed so
-**red = A louder, blue = B louder**) so it reads as "mountains and valleys"
-rather than raw dB. A colour key showing this appears next to the plot title
+Toggle **⛰ Difference** (top toolbar) to see one chosen file's spectrogram
+minus another's, as one plot. Which two files: click the small **①**/**②**
+buttons on any two sidebar rows — whichever files you've marked that way are
+the pair, regardless of where they sit in the list or whether their Compare
+checkbox is ticked. New files auto-fill ① then ② the first time they're
+loaded, so a fresh two-file session works with no extra clicks, but you're
+free to re-pick at any time. Peaks show where ① is louder than ②, valleys
+where ② is louder, using a zero-centred diverging colorscale (RdBu, reversed
+so **red = ① louder, blue = ② louder**) so it reads as "mountains and
+valleys" rather than raw dB. A colour key showing this appears next to the plot title
 in Heatmap, 3D Surface, and Mirror-by-frequency (the modes where colour/fill
-encodes A-vs-B) — it's hidden in Waterfall and Mirror-by-time, where colour
+encodes ①-vs-②) — it's hidden in Waterfall and Mirror-by-time, where colour
 instead encodes time or the selected sequential colorscale. 3D Surface is
-the most literal read on the "mountains and valleys." If A and B differ in
-sample rate or length, B is resampled onto A's frequency/time grid first
+the most literal read on the "mountains and valleys." If ① and ② differ in
+sample rate or length, ② is resampled onto ①'s frequency/time grid first
 (Heatmap/Surface/Waterfall only — Mirror doesn't need this, since it never
 subtracts the two).
 
@@ -139,15 +151,15 @@ subtracts the two).
 
 Toggle **🎙 Live** (top toolbar) for a full-width, continuously-updating
 spectrogram of the microphone — useful for dialing in FFT window/hop/max-
-freq/smoothing/colorscale by ear-and-eye without committing anything to
-Sample A or B. Click **Start Live** to begin; it uses the exact same rolling
-5 s ring buffer and throttled `compute_spectrogram()` recompute that
-recording's live preview already uses (just keyed by a `'live'` pseudo-slot
-instead of `'a'`/`'b'`), so sidebar setting changes take effect within a
-push or two, same as during a recording. There's only one physical
-microphone, so Live and per-slot Recording are mutually exclusive — each
-disables the other's controls while active — and leaving Live mode (or
-closing the tab) stops it and releases the mic automatically.
+freq/smoothing/colorscale by ear-and-eye without adding anything to the file
+list. Click **Start Live** to begin; it uses the exact same rolling 5 s ring
+buffer and throttled `compute_spectrogram()` recompute that Recording's live
+preview already uses (just keyed by a `'live'` pseudo-slot instead of a real
+file id), so setting changes (⚙️ FFT Settings) take effect within a push or
+two, same as during a recording. There's only one physical microphone, so
+Live and Recording are mutually exclusive — each disables the other's
+controls while active — and leaving Live mode (or closing the tab) stops it
+and releases the mic automatically.
 
 All signal processing is delegated to the canonical ObieApp Python modules,
 loaded live from GitHub at runtime — none of it is reimplemented here (see

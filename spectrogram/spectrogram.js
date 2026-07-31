@@ -3,42 +3,67 @@
  *
  * Requires (loaded before this file):
  *   plotly-theme.js   — cssVar(), plotLayout(), pcfg, COL
- *   audio.js          — AudioPlayer
+ *   audio.js          — decodeWAV/encodeWAV (AudioPlayer isn't used here —
+ *                        see the playback section below for why)
  *
- * Two independent "slots" (A/B) can each be loaded from a file or recorded
- * from the mic, so their spectrograms can be compared side by side. FFT
- * settings (window/hop/max-freq/colorscale/freq-axis-scale) are shared
- * across both slots so the comparison is apples-to-apples.
+ * An arbitrary number of files can be loaded (or recorded from the mic),
+ * tracked in `_files` and listed in the sidebar, Explore-style. From there:
+ *   - Single  shows one "focused" file, full width.
+ *   - Compare stacks up to 4 files whose sidebar checkbox is ticked, as rows.
+ *   - Difference/Mirror operate on exactly two files, chosen via the small
+ *     ①/② buttons on each sidebar row.
+ *   - Live watches the microphone continuously without saving anything.
+ * FFT settings (window/hop/max-freq/smoothing/colorscale) are shared across
+ * every loaded file, so any comparison is apples-to-apples.
  *
  * All WAV/FRF decoding and STFT computation run in Python (main.py), using
  * the canonical ObieApp fileio/processing modules. This file only manages
- * playback state, plot rendering, mic capture wiring, and UI interactions.
+ * the file list, playback, plot rendering, mic capture wiring, and UI state.
  * ───────────────────────────────────────────────────────────────────── */
 
-// ── Per-slot state ──────────────────────────────────────────────────────
-function _freshSlot() {
+// ── Loaded-file list ────────────────────────────────────────────────────
+function _freshFile(id, name) {
   return {
+    id, name,
     samples: null, sr: 48000, channels: 1, isStereo: false,
     showChannel: 'l', lCache: null, rCache: null,
+    status: '', statusCls: '',
+    compareSelected: false, recording: false,
   };
 }
-const slots = { a: _freshSlot(), b: _freshSlot() };
+let _files = [];
+let _nextId = 1;
+let _focusedId = null;   // Single-mode target
+let _diffId1 = null;     // "①" — Difference/Mirror
+let _diffId2 = null;     // "②" — Difference/Mirror
 
-let _logFreq = false;
+function _getFile(id) { return _files.find(f => f.id === id); }
+function _fileNum(id) { return _files.findIndex(f => f.id === id) + 1; }
+function _esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 
-const player = new AudioPlayer({ a: 'play-btn-a', b: 'play-btn-b' });
+// New files are auto-enrolled into the two "active" comparisons — Compare
+// selection (up to 4) and the Difference ①/② pair — so the tool has
+// something to show immediately, while the sidebar's checkbox/①/② controls
+// remain free to override the choice at any time.
+function _autoAssignNewFile(f) {
+  if (_focusedId == null) _focusedId = f.id;
+  if (_diffId1 == null) _diffId1 = f.id;
+  else if (_diffId2 == null && f.id !== _diffId1) _diffId2 = f.id;
+  if (_files.filter(x => x.compareSelected).length < 4) f.compareSelected = true;
+}
+
+let _mode = 'single';   // 'single' | 'compare' | 'diff' | 'live'
 
 // ── Plot initialisation ───────────────────────────────────────────────
 const _pcfg = { ...pcfg, toImageButtonOptions: { format: 'png', scale: 2, filename: 'spectrogram' } };
 const _wl = (title, xl, yl, extra) => ({
   ...plotLayout(title, xl, yl, extra), paper_bgcolor: '#fff', plot_bgcolor: '#fff',
 });
+let _logFreq = false;
 
-['a', 'b'].forEach(slot => {
-  Plotly.newPlot(`waveform-plot-${slot}`, [], _wl('Waveform', 'Time (s)', 'Amplitude'), _pcfg);
-  Plotly.newPlot(`spec-plot-${slot}`,     [], _wl('Spectrogram', 'Time (s)', 'Frequency (Hz)'), _pcfg);
-});
-Plotly.newPlot('diff-plot', [], _wl('Difference: Sample A − Sample B', 'Time (s)', 'Frequency (Hz)'), _pcfg);
+Plotly.newPlot('diff-plot', [], _wl('Difference: ① − ②', 'Time (s)', 'Frequency (Hz)'), _pcfg);
 Plotly.newPlot('live-plot', [], _wl('Live Spectrogram', 'Time (s)', 'Frequency (Hz)'), _pcfg);
 
 // ── File loading (WAV, MP3, or FRF files IFFT'd to an impulse response) ──
@@ -67,29 +92,47 @@ async function _decodeAudioFile(arrayBuffer) {
 
 const FRF_EXTS = ['trf', 'trv', 'avc', 'avr', 'csv', 'mat'];
 
-function loadFile(slot, input) {
-  const file = input.files[0]; if (!file) return;
-  if (_recordingSlot) stopRecording();
-  document.getElementById(`wav-btn-text-${slot}`).textContent = file.name;
-  setSt(slot, 'reading…');
+function _setFileStatus(id, text, cls) {
+  const f = _getFile(id);
+  if (!f) return;
+  f.status = text; f.statusCls = cls || '';
+  _renderFileList();
+}
+
+window.loadFiles = function(input) {
+  const picked = Array.from(input.files || []);
+  input.value = '';   // allow re-selecting the same file(s) later
+  picked.forEach(_loadOneFile);
+};
+
+function _loadOneFile(file) {
+  if (_recordingId) stopRecording();
+  const id = String(_nextId++);
+  const f = _freshFile(id, file.name);
+  f.status = 'reading…';
+  _files.push(f);
+  _autoAssignNewFile(f);
+  _renderFileList();
+  if (_mode === 'single' || _mode === 'compare') _rebuildComparePanels();
+
   const ext = (file.name.split('.').pop() || '').toLowerCase();
   const reader = new FileReader();
-  reader.onerror = () => setSt(slot, 'read error', 'err');
+  reader.onerror = () => _setFileStatus(id, 'read error', 'err');
   reader.onload = async e => {
     if (ext === 'wav') {
-      if (!window.pySpecLoadWav) { setSt(slot, 'Python not ready — try again in a moment', 'err'); return; }
-      window.pySpecLoadWav(slot, file.name, new Uint8Array(e.target.result));
+      if (!window.pySpecLoadWav) { _setFileStatus(id, 'Python not ready — try again in a moment', 'err'); return; }
+      window.pySpecLoadWav(id, file.name, new Uint8Array(e.target.result));
     } else if (FRF_EXTS.includes(ext)) {
-      if (!window.pySpecLoadComplex) { setSt(slot, 'Python not ready — try again in a moment', 'err'); return; }
-      window.pySpecLoadComplex(slot, file.name, new Uint8Array(e.target.result));
+      if (!window.pySpecLoadComplex) { _setFileStatus(id, 'Python not ready — try again in a moment', 'err'); return; }
+      window.pySpecLoadComplex(id, file.name, new Uint8Array(e.target.result));
     } else {
       // mp3 and anything else — decode client-side via Web Audio first.
-      if (!window.pySpecLoadDecodedAudio) { setSt(slot, 'Python not ready — try again in a moment', 'err'); return; }
+      if (!window.pySpecLoadDecodedAudio) { _setFileStatus(id, 'Python not ready — try again in a moment', 'err'); return; }
       try {
         const { samples, sr, nChannels } = await _decodeAudioFile(e.target.result);
-        window.pySpecLoadDecodedAudio(slot, file.name, samples, sr, nChannels);
+        window.pySpecLoadDecodedAudio(id, file.name, samples, sr, nChannels);
       } catch (err) {
-        setSt(slot, 'could not decode audio: ' + err.message.slice(0, 60), 'err');
+        _setFileStatus(id, 'could not decode audio: ' + err.message.slice(0, 60), 'err');
       }
     }
   };
@@ -97,29 +140,37 @@ function loadFile(slot, input) {
 }
 
 window.onSpecSampleResult = function(slot, samplesArr, sr, nChannels, info, stereo) {
-  const s = slots[slot];
-  s.samples  = new Float32Array(samplesArr);
-  s.sr       = +sr;
-  s.channels = +nChannels;
-  s.isStereo = !!stereo;
-  s.showChannel = 'l';
-  setSt(slot, info, 'ok');
-  document.getElementById(`play-btn-${slot}`).disabled = false;
-  document.getElementById(`chan-btn-${slot}`).style.display = s.isStereo ? '' : 'none';
-  updateChanBtn(slot);
-  plotWaveform(slot);
+  const f = _getFile(slot);
+  if (!f) return;   // file was removed before this async result arrived
+  // A just-finalized recording still has its "Recording…" placeholder name —
+  // give it a real one now that it's a static sample like any loaded file.
+  // (recording is already flipped false by stopRecording() before this
+  // async result arrives, so the name itself is the only reliable marker.)
+  if (f.name === 'Recording…') f.name = 'Mic recording';
+  f.samples  = new Float32Array(samplesArr);
+  f.sr       = +sr;
+  f.channels = +nChannels;
+  f.isStereo = !!stereo;
+  f.showChannel = 'l';
+  f.status = info; f.statusCls = 'ok';
+  f.recording = false;
   // A changed sample invalidates any cached numeric diff grid, regardless of
   // which mode is active right now — otherwise switching into Difference
   // mode later (or Mirror's 3D Signed-Diff style, which reads _diffCache
-  // directly) could render a stale A−B computed against the old sample.
+  // directly) could render a stale ①−② computed against the old sample.
   _diffCache = null;
-  if (_mode === 'diff') _requestDiff();
+  _renderFileList();
+  const shown = _panelIdsForMode();
+  if (shown.includes(f.id)) renderSpec(f.id);
+  if (_mode === 'diff') _maybeRequestDiff();
 };
 
 window.onSpecSampleError = function(slot, msg) {
-  slots[slot].samples = null;
-  document.getElementById(`play-btn-${slot}`).disabled = true;
-  setSt(slot, 'error: ' + msg, 'err');
+  const f = _getFile(slot);
+  if (!f) return;
+  f.samples = null;
+  f.status = 'error: ' + msg; f.statusCls = 'err';
+  _renderFileList();
 };
 
 window.onSpecError = function(slot, msg) {
@@ -129,7 +180,10 @@ window.onSpecError = function(slot, msg) {
     el.className = 'sp-panel-status err';
     return;
   }
-  setSt(slot, 'error: ' + msg, 'err');
+  const f = _getFile(slot);
+  if (!f) return;
+  f.status = 'error: ' + msg; f.statusCls = 'err';
+  _renderFileList();
 };
 
 // ── Spectrogram unpack / render ────────────────────────────────────────
@@ -149,15 +203,16 @@ window.onSpecSpectrogramResult = function(slot, channel, times_js, freqs_js, fla
     renderFrameInfo('live', cache.times, cache.freqs);
     return;
   }
-  const s = slots[slot];
-  if (channel === 'r') s.rCache = cache; else s.lCache = cache;
-  if (s.showChannel === channel) {
-    renderSpec(slot);
-    // The other panel's own data hasn't changed, but the shared intensity
-    // range this update may have shifted (see _sharedSampleRange) — redraw
-    // it too so both panels stay on the same scale.
-    const other = slot === 'a' ? 'b' : 'a';
-    if (slots[other].lCache || slots[other].rCache) renderSpec(other);
+  const f = _getFile(slot);
+  if (!f) return;
+  if (channel === 'r') f.rCache = cache; else f.lCache = cache;
+  if (f.showChannel === channel) {
+    const shown = _panelIdsForMode();
+    if (shown.includes(f.id)) {
+      // Redraw every currently-shown panel, not just this one — the shared
+      // intensity range (see _sharedRangeAmong) this update may have shifted.
+      shown.forEach(renderSpec);
+    }
   }
 };
 
@@ -182,35 +237,42 @@ function _dataMinMax(zDb) {
   return { min: lo, max: hi };
 }
 
-// Sample A and Sample B are separate Plotly figures, so with no explicit
-// range each one auto-scales its heatmap/surface to its OWN min/max — the
-// hottest colour in A's panel and the hottest colour in B's panel can end up
-// meaning two different dB values. When both are loaded, share one range
-// (their combined min/max) across both panels so a given dB reads as the
-// same colour/height everywhere, exactly like the diff view already does
-// with its zero-centred range.
-function _sharedSampleRange(slot) {
-  const other = slot === 'a' ? 'b' : 'a';
-  const mine   = slots[slot].showChannel  === 'r' ? slots[slot].rCache  : slots[slot].lCache;
-  const theirs = slots[other].showChannel === 'r' ? slots[other].rCache : slots[other].lCache;
-  if (!mine || !theirs) return null;
-  const a = _dataMinMax(mine.zDb), b = _dataMinMax(theirs.zDb);
-  return { min: Math.min(a.min, b.min), max: Math.max(a.max, b.max) };
+// Each shown panel is a separate Plotly figure, so with no explicit range
+// each one auto-scales its heatmap/surface to its OWN min/max — the hottest
+// colour in one panel and the hottest colour in another can end up meaning
+// two different dB values. When 2+ panels are shown at once, share one range
+// (their combined min/max) across all of them, so a given dB reads as the
+// same colour/height everywhere.
+function _sharedRangeAmong(ids) {
+  const caches = ids.map(id => {
+    const f = _getFile(id);
+    return f && (f.showChannel === 'r' ? f.rCache : f.lCache);
+  }).filter(Boolean);
+  if (caches.length < 2) return null;
+  let lo = Infinity, hi = -Infinity;
+  for (const c of caches) {
+    const mm = _dataMinMax(c.zDb);
+    if (mm.min < lo) lo = mm.min;
+    if (mm.max > hi) hi = mm.max;
+  }
+  return { min: lo, max: hi };
 }
 
-function renderSpec(slot) {
-  const s = slots[slot];
-  const cache = s.showChannel === 'r' ? s.rCache : s.lCache;
-  if (!cache) return;
-  const label = _recordingSlot === slot ? ' · Live'
-    : s.isStereo ? (s.showChannel === 'r' ? ' · R channel' : ' · L channel') : '';
-  _renderGrid(`spec-plot-${slot}`, cache, 'Spectrogram' + label, false, undefined, _sharedSampleRange(slot));
-  renderFrameInfo(slot, cache.times, cache.freqs);
+function renderSpec(id) {
+  const f = _getFile(id);
+  if (!f) return;
+  const cache = f.showChannel === 'r' ? f.rCache : f.lCache;
+  const el = document.getElementById(`spec-plot-${id}`);
+  if (!cache || !el) return;
+  const label = f.recording ? ' · Live'
+    : f.isStereo ? (f.showChannel === 'r' ? ' · R channel' : ' · L channel') : '';
+  _renderGrid(`spec-plot-${id}`, cache, `#${_fileNum(id)} ${f.name}` + label, false, undefined, _sharedRangeAmong(_panelIdsForMode()));
+  renderFrameInfo(id, cache.times, cache.freqs);
 }
 
 // ── Multi-view rendering: heatmap / 3D surface / waterfall ─────────────
-// Shared by Sample A, Sample B, and the Difference view — `isDiff` selects
-// a diverging, zero-centred colour range so peaks/dips read as +/- dB.
+// Shared by every panel and the Difference view — `isDiff` selects a
+// diverging, zero-centred colour range so peaks/dips read as +/- dB.
 function _maxAbs(zT) {
   let m = 0;
   for (const row of zT) for (const v of row) if (Number.isFinite(v)) m = Math.max(m, Math.abs(v));
@@ -250,12 +312,12 @@ function _waterfallTraces(freqs, times, zT, isDiff) {
 function _renderGrid(divId, cache, title, isDiff, forceMode, range) {
   let mode = forceMode || document.getElementById('view-mode-sel').value;
 
-  // Mirror is a Difference-only view (it juxtaposes Sample A and Sample B
-  // directly rather than plotting a single grid) — a lone Sample A/B panel
-  // has nothing to mirror against, so it falls back to Heatmap. (forceMode
-  // sidesteps this — Mirror's own 3D Signed-Diff style calls back into this
-  // function with forceMode:'surface' to reuse the surface-drawing code
-  // below directly, rather than bouncing back into _renderMirror.)
+  // Mirror is a Difference-only view (it juxtaposes ① and ② directly rather
+  // than plotting a single grid) — a lone panel has nothing to mirror
+  // against, so it falls back to Heatmap. (forceMode sidesteps this —
+  // Mirror's own 3D Signed-Diff style calls back into this function with
+  // forceMode:'surface' to reuse the surface-drawing code below directly,
+  // rather than bouncing back into _renderMirror.)
   if (mode === 'mirror') {
     if (isDiff) { _renderMirror(divId, title); return; }
     mode = 'heatmap';
@@ -272,8 +334,8 @@ function _renderGrid(divId, cache, title, isDiff, forceMode, range) {
       colorbar: { title: isDiff ? 'ΔdB' : 'dB', titleside: 'right', thickness: 10, tickfont: { size: 9 } },
       hovertemplate: hoverTemplate3D };
     // Plotly's built-in 'RdBu' maps low→red, high→blue — the opposite of the
-    // A-is-red/B-is-blue convention (see the legend in the diff toolbar), so
-    // flip it: negative (B louder) → blue, positive (A louder) → red.
+    // ①-is-red/②-is-blue convention (see the legend in the diff toolbar), so
+    // flip it: negative (② louder) → blue, positive (① louder) → red.
     if (isDiff) { const m = _maxAbs(zDb); trace.cmin = -m; trace.cmax = m; trace.reversescale = true; }
     else if (range) { trace.cmin = range.min; trace.cmax = range.max; }
     Plotly.react(divId, [trace], {
@@ -308,19 +370,19 @@ function _renderGrid(divId, cache, title, isDiff, forceMode, range) {
   }
 }
 
-// ── Mirror view: Sample A on the left, Sample B on the right ───────────
-// Unlike Heatmap/Surface/Waterfall, Mirror doesn't subtract A from B — it
-// shows each sample's own spectrogram directly, split around a centre line,
+// ── Mirror view: ① on the left, ② on the right ─────────────────────────
+// Unlike Heatmap/Surface/Waterfall, Mirror doesn't subtract ① from ② — it
+// shows each file's own spectrogram directly, split around a centre line,
 // so you compare shapes visually rather than reading a computed difference.
 // Two sub-styles, toggled via the "Mirror: …" toolbar button:
 //   'freq' (default) — shared frequency axis (Y), like a population pyramid:
-//       time is collapsed to a mean-dB-per-bin spectrum for each sample.
+//       time is collapsed to a mean-dB-per-bin spectrum for each file.
 //   'time' — shared time axis (Y), each side a full heatmap with frequency
 //       (X) increasing outward from the centre line.
 let _mirrorAxis = 'freq';           // 'freq' | 'time' — ignored when _mirror3D is on
 let _mirrorStyle = 'independent';   // 'independent' | 'diff'
 let _mirror3D = false;              // flat 2D pyramid/mirrored-heatmap vs literal 3D surfaces
-const MIRROR_COLOR_A = '#b2182b';   // matches the A-louder/B-louder legend swatches
+const MIRROR_COLOR_A = '#b2182b';   // matches the ①-louder/②-louder legend swatches
 const MIRROR_COLOR_B = '#2166ac';
 
 function _avgSpectrum(cache) {
@@ -348,10 +410,10 @@ function _renderMirrorByFreq(divId, title, aCache, bCache) {
   const fMin = Math.min(freqsA[0], freqsB[0]), fMax = Math.max(freqsA.at(-1), freqsB.at(-1));
 
   if (_mirrorStyle === 'diff') {
-    // True subtraction: avg(A) − avg(B), with B's average resampled onto
-    // A's frequency bins first (1-D, same idea as main.py's _compute_diff,
+    // True subtraction: avg(①) − avg(②), with ②'s average resampled onto
+    // ①'s frequency bins first (1-D, same idea as main.py's _compute_diff,
     // just frequency-only since time is already collapsed to a mean here).
-    // Positive (A louder) → x negative → extends left, red. Negative (B
+    // Positive (① louder) → x negative → extends left, red. Negative (②
     // louder) → x positive → extends right, blue. Split into two traces so
     // each half gets its own fill colour — Plotly can't colour one fill by
     // sign, so wherever a trace's sign doesn't apply its value is zeroed.
@@ -361,11 +423,11 @@ function _renderMirrorByFreq(divId, title, aCache, bCache) {
     Plotly.react(divId, [
       { x: xLeft, y: freqsA, customdata: diff, type: 'scatter', mode: 'lines', fill: 'tozerox',
         fillcolor: MIRROR_COLOR_A + '55', line: { color: MIRROR_COLOR_A, width: 1 },
-        name: 'A louder', hovertemplate: 'Freq: %{y:.0f} Hz<br>ΔdB: %{customdata:.1f}<extra></extra>' },
+        name: '① louder', hovertemplate: 'Freq: %{y:.0f} Hz<br>ΔdB: %{customdata:.1f}<extra></extra>' },
       { x: xRight, y: freqsA, customdata: diff, type: 'scatter', mode: 'lines', fill: 'tozerox',
         fillcolor: MIRROR_COLOR_B + '55', line: { color: MIRROR_COLOR_B, width: 1 },
-        name: 'B louder', hovertemplate: 'Freq: %{y:.0f} Hz<br>ΔdB: %{customdata:.1f}<extra></extra>' },
-    ], _wl(title + ' (Δ = A − B)', '← A louder · B louder →', 'Frequency (Hz)', {
+        name: '② louder', hovertemplate: 'Freq: %{y:.0f} Hz<br>ΔdB: %{customdata:.1f}<extra></extra>' },
+    ], _wl(title + ' (Δ = ① − ②)', '← ① louder · ② louder →', 'Frequency (Hz)', {
       margin: { l: 55, r: 20, t: 26, b: 34 },
       xaxis: { showticklabels: false, zeroline: true, zerolinewidth: 1, zerolinecolor: cssVar('--border') },
       yaxis: { type: _logFreq ? 'log' : 'linear', range: _logFreq ? undefined : [fMin, fMax] },
@@ -374,8 +436,8 @@ function _renderMirrorByFreq(divId, title, aCache, bCache) {
     return;
   }
 
-  // Independent (default): each sample's own average, not a subtraction —
-  // see the module comment above for why.
+  // Independent (default): each file's own average, not a subtraction — see
+  // the module comment above for why.
   // reduce(), not Math.min(...arr) — spreading a large array into a function
   // call can overflow the JS argument stack.
   const floor = Math.min(avgA.reduce((m, v) => Math.min(m, v), Infinity),
@@ -386,11 +448,11 @@ function _renderMirrorByFreq(divId, title, aCache, bCache) {
   Plotly.react(divId, [
     { x: extentA, y: freqsA, customdata: avgA, type: 'scatter', mode: 'lines', fill: 'tozerox',
       fillcolor: MIRROR_COLOR_A + '55', line: { color: MIRROR_COLOR_A, width: 1 },
-      name: 'Sample A', hovertemplate: 'Sample A<br>Freq: %{y:.0f} Hz<br>Level: %{customdata:.1f} dB<extra></extra>' },
+      name: '①', hovertemplate: '①<br>Freq: %{y:.0f} Hz<br>Level: %{customdata:.1f} dB<extra></extra>' },
     { x: extentB, y: freqsB, customdata: avgB, type: 'scatter', mode: 'lines', fill: 'tozerox',
       fillcolor: MIRROR_COLOR_B + '55', line: { color: MIRROR_COLOR_B, width: 1 },
-      name: 'Sample B', hovertemplate: 'Sample B<br>Freq: %{y:.0f} Hz<br>Level: %{customdata:.1f} dB<extra></extra>' },
-  ], _wl(title, '← Sample A · Sample B →', 'Frequency (Hz)', {
+      name: '②', hovertemplate: '②<br>Freq: %{y:.0f} Hz<br>Level: %{customdata:.1f} dB<extra></extra>' },
+  ], _wl(title, '← ① · ② →', 'Frequency (Hz)', {
     margin: { l: 55, r: 20, t: 26, b: 34 },
     xaxis: { showticklabels: false, zeroline: true, zerolinewidth: 1, zerolinecolor: cssVar('--border') },
     yaxis: { type: _logFreq ? 'log' : 'linear', range: _logFreq ? undefined : [fMin, fMax] },
@@ -402,7 +464,7 @@ function _renderMirrorByTime(divId, title, aCache, bCache) {
   // zDb is already freq-major (one row per freq bin) — exactly the shape
   // needed here, since frequency is now the mirrored/split axis (y) and
   // time is shared (x). customdata carries each row's true (positive) freq,
-  // since Sample A's y values themselves are negated for the mirror.
+  // since ①'s y values themselves are negated for the mirror.
   const custA = aCache.freqs.map(f => aCache.times.map(() => f));
   const custB = bCache.freqs.map(f => bCache.times.map(() => f));
   const colorscale = document.getElementById('colorscale-sel').value;
@@ -416,33 +478,33 @@ function _renderMirrorByTime(divId, title, aCache, bCache) {
   Plotly.react(divId, [
     { x: aCache.times, y: aCache.freqs.map(f => -f), z: aCache.zDb, customdata: custA,
       type: 'heatmap', colorscale, showscale: false, zsmooth: 'fast', zmin, zmax,
-      hovertemplate: 'Sample A<br>Time: %{x:.3f} s<br>Freq: %{customdata:.0f} Hz<br>Level: %{z:.1f} dB<extra></extra>' },
+      hovertemplate: '①<br>Time: %{x:.3f} s<br>Freq: %{customdata:.0f} Hz<br>Level: %{z:.1f} dB<extra></extra>' },
     { x: bCache.times, y: bCache.freqs, z: bCache.zDb, customdata: custB,
       type: 'heatmap', colorscale, showscale: true, zmin, zmax,
       colorbar: { title: 'dB', titleside: 'right', thickness: 10, len: 0.95, tickfont: { size: 9 } }, zsmooth: 'fast',
-      hovertemplate: 'Sample B<br>Time: %{x:.3f} s<br>Freq: %{customdata:.0f} Hz<br>Level: %{z:.1f} dB<extra></extra>' },
-  ], _wl(title, 'Time (s)', '↓ Sample A · Frequency (Hz) · Sample B ↑', {
+      hovertemplate: '②<br>Time: %{x:.3f} s<br>Freq: %{customdata:.0f} Hz<br>Level: %{z:.1f} dB<extra></extra>' },
+  ], _wl(title, 'Time (s)', '↓ ① · Frequency (Hz) · ② ↑', {
     margin: { l: 55, r: 45, t: 26, b: 34 },
-    // Log scale is undefined for negative Y (Sample A's mirrored side), so
-    // this sub-view is linear-only regardless of the Freq: Lin/Log toggle.
+    // Log scale is undefined for negative Y (①'s mirrored side), so this
+    // sub-view is linear-only regardless of the Freq: Lin/Log toggle.
     yaxis: { range: [-fMax, fMax], zeroline: true, zerolinewidth: 1, zerolinecolor: cssVar('--border') },
   }), _pcfg);
 }
 
-// 3D style, Independent: Sample A and Sample B each as their own full,
-// time-resolved 3D surface (X=time, Y=freq, Z=dB), overlaid semi-transparent
-// in one scene — unlike the flat pyramid, nothing is collapsed to a mean, so
-// this is literally each sample's whole spectrogram as terrain you can
-// rotate to see where one pokes above the other. Solid (non-diverging)
-// per-surface colours matching the A-red/B-blue legend, since here colour
-// just distinguishes the two surfaces rather than encoding a difference.
+// 3D style, Independent: ① and ② each as their own full, time-resolved 3D
+// surface (X=time, Y=freq, Z=dB), overlaid semi-transparent in one scene —
+// unlike the flat pyramid, nothing is collapsed to a mean, so this is
+// literally each file's whole spectrogram as terrain you can rotate to see
+// where one pokes above the other. Solid (non-diverging) per-surface
+// colours matching the ①-red/②-blue legend, since here colour just
+// distinguishes the two surfaces rather than encoding a difference.
 function _renderMirror3DIndependent(divId, title, aCache, bCache) {
   const hover = label => `${label}<br>Time: %{x:.3f} s<br>Freq: %{y:.0f} Hz<br>Level: %{z:.1f} dB<extra></extra>`;
   Plotly.react(divId, [
     { x: aCache.times, y: aCache.freqs, z: aCache.zDb, type: 'surface', showscale: false, opacity: 0.75,
-      colorscale: [[0, MIRROR_COLOR_A], [1, MIRROR_COLOR_A]], hovertemplate: hover('Sample A'), name: 'Sample A' },
+      colorscale: [[0, MIRROR_COLOR_A], [1, MIRROR_COLOR_A]], hovertemplate: hover('①'), name: '①' },
     { x: bCache.times, y: bCache.freqs, z: bCache.zDb, type: 'surface', showscale: false, opacity: 0.75,
-      colorscale: [[0, MIRROR_COLOR_B], [1, MIRROR_COLOR_B]], hovertemplate: hover('Sample B'), name: 'Sample B' },
+      colorscale: [[0, MIRROR_COLOR_B], [1, MIRROR_COLOR_B]], hovertemplate: hover('②'), name: '②' },
   ], {
     title: { text: title, font: { size: 11 }, pad: { t: 2, b: 0 } },
     font: { size: 10, family: 'inherit' },
@@ -457,21 +519,21 @@ function _renderMirror3DIndependent(divId, title, aCache, bCache) {
 }
 
 function _renderMirror(divId, title) {
-  const a = slots.a, b = slots.b;
-  if (!a.lCache || !b.lCache) {
+  const a = _getFile(_diffId1), b = _getFile(_diffId2);
+  if (!a || !b || !a.lCache || !b.lCache) {
     Plotly.react(divId, [], _wl(title, '', '', {}), _pcfg);
     return;
   }
   if (_mirror3D) {
     if (_mirrorStyle === 'diff') {
-      // A literal 3D mountains/valleys surface of the true A−B difference
+      // A literal 3D mountains/valleys surface of the true ①−② difference
       // needs the full, un-collapsed (time, freq) diff grid — the same data
       // the numeric Difference view's own 3D Surface uses — so this reuses
       // _renderGrid's surface-drawing code directly (forceMode:'surface'
       // sidesteps its usual "Plot type is mirror" redirect) rather than
       // duplicating cmin/cmax/reversescale/hover logic here.
-      if (!_diffCache) { _requestDiff(); return; }
-      _renderGrid(divId, _diffCache, title + ' (Δ = A − B)', true, 'surface');
+      if (!_diffCache) { _maybeRequestDiff(); return; }
+      _renderGrid(divId, _diffCache, title + ' (Δ = ① − ②)', true, 'surface');
     } else {
       _renderMirror3DIndependent(divId, title, a.lCache, b.lCache);
     }
@@ -487,14 +549,14 @@ window.specToggleMirrorAxis = function() {
     _mirrorAxis === 'freq' ? 'Mirror: Frequency' : 'Mirror: Time';
   _updateDiffLegend();
   _updateMirrorStyleBtn();
-  if (_mode === 'diff') _renderMirror('diff-plot', 'Difference: Sample A − Sample B');
+  if (_mode === 'diff') _renderMirror('diff-plot', _diffTitle());
 };
 
 window.specToggleMirrorStyle = function() {
   _mirrorStyle = _mirrorStyle === 'independent' ? 'diff' : 'independent';
   document.getElementById('mirror-style-btn').textContent =
     _mirrorStyle === 'diff' ? 'Mirror: Signed Diff' : 'Mirror: Independent';
-  if (_mode === 'diff') _renderMirror('diff-plot', 'Difference: Sample A − Sample B');
+  if (_mode === 'diff') _renderMirror('diff-plot', _diffTitle());
 };
 
 window.specToggleMirror3D = function() {
@@ -503,11 +565,11 @@ window.specToggleMirror3D = function() {
   _updateDiffLegend();
   _updateMirrorAxisBtn();
   _updateMirrorStyleBtn();
-  if (_mode === 'diff') _renderMirror('diff-plot', 'Difference: Sample A − Sample B');
+  if (_mode === 'diff') _renderMirror('diff-plot', _diffTitle());
 };
 
 // The mirror-axis toggle only makes sense in flat Mirror mode — 3D doesn't
-// need it (overlapping surfaces + rotation separate A and B without having
+// need it (overlapping surfaces + rotation separate ① and ② without having
 // to pick which axis to mirror on).
 function _updateMirrorAxisBtn() {
   const btn = document.getElementById('mirror-axis-btn');
@@ -533,12 +595,12 @@ function _updateMirrorStyleBtn() {
   btn.style.display = show ? '' : 'none';
 }
 
-// The A-red/B-blue legend applies to Heatmap/3D Surface (colour encodes the
-// sign of A−B), Mirror-by-frequency (A's fill/line is literally drawn in the
-// same red, B's in the same blue), and Mirror's 3D style (same convention,
-// either as two solid-coloured surfaces or one reversed-RdBu diff surface).
-// It's hidden for Waterfall (colour means time there) and flat Mirror-by-
-// time (heatmaps use the selected sequential colorscale, not red/blue).
+// The ①-red/②-blue legend applies to Heatmap/3D Surface (colour encodes the
+// sign of ①−②), Mirror-by-frequency (①'s fill/line is literally drawn in
+// the same red, ②'s in the same blue), and Mirror's 3D style (same
+// convention, either as two solid-coloured surfaces or one reversed-RdBu
+// diff surface). It's hidden for Waterfall (colour means time there) and
+// flat Mirror-by-time (heatmaps use the selected sequential colorscale).
 function _updateDiffLegend() {
   const legend = document.getElementById('diff-legend');
   const mode = document.getElementById('view-mode-sel').value;
@@ -552,20 +614,21 @@ window.specViewModeChanged = function() {
   _updateMirror3DBtn();
   _updateMirrorStyleBtn();
   const mode = document.getElementById('view-mode-sel').value;
-  // Flat Mirror renders straight from Sample A/B's own already-computed
+  // Flat Mirror renders straight from ①/②'s own already-computed
   // spectrograms, no interpolated diff grid needed — but Mirror's 3D
   // Signed-Diff style does need it (see _renderMirror), same as every
   // non-Mirror view, so only skip the fetch for flat/Independent Mirror.
   const needsDiffCache = !(mode === 'mirror' && !(_mirror3D && _mirrorStyle === 'diff'));
   if (_mode === 'diff' && needsDiffCache && !_diffCache) {
-    _requestDiff();
+    _maybeRequestDiff();
     return;
   }
   specRenderAll();
 };
 
-function renderFrameInfo(slot, times, freqs) {
-  const el = document.getElementById(`frame-info-${slot}`);
+function renderFrameInfo(id, times, freqs) {
+  const el = document.getElementById(`frame-info-${id}`);
+  if (!el) return;
   if (!times.length || !freqs.length) { el.textContent = '–'; return; }
   const dt = times.length > 1 ? times[1] - times[0] : 0;
   const df = freqs.length > 1 ? freqs[1] - freqs[0] : 0;
@@ -573,21 +636,7 @@ function renderFrameInfo(slot, times, freqs) {
     `${times.length}×${freqs.length} (t×f)  ·  ${(dt * 1000).toFixed(1)} ms/frame  ·  ${df.toFixed(1)} Hz/bin`;
 }
 
-function plotWaveform(slot) {
-  const s = slots[slot];
-  if (!s.samples) return;
-  const stride = s.isStereo ? 2 : 1;
-  const n = Math.floor(s.samples.length / stride);
-  const step = Math.max(1, Math.floor(n / 4000));
-  const x = [], y = [];
-  for (let i = 0; i < n; i += step) { x.push(i / s.sr); y.push(s.samples[i * stride]); }
-  Plotly.react(`waveform-plot-${slot}`, [{
-    x, y, type: 'scatter', mode: 'lines',
-    line: { color: COL.wav, width: 1 }, showlegend: false,
-  }], _wl('Waveform', 'Time (s)', 'Amplitude'), _pcfg);
-}
-
-// ── Settings (shared across both slots) ────────────────────────────────
+// ── Settings (shared across every loaded file) ─────────────────────────
 function specSettingsChanged() {
   const nFft = +document.getElementById('n-fft-sel').value;
   let hop = +document.getElementById('hop-sel').value;
@@ -600,44 +649,30 @@ function specSettingsChanged() {
   if (!window.pySpecRecompute) return;
   window.pySpecRecompute(nFft, hop, fMax, semitones);
   // A settings change invalidates any cached numeric diff grid — flat Mirror
-  // doesn't need it (it reads Sample A/B's own spectrograms directly, which
+  // doesn't need it (it reads ①/②'s own spectrograms directly, which
   // pySpecRecompute above just refreshed), but Mirror's 3D Signed-Diff style
   // does, so null it unconditionally and let _renderMirror re-fetch lazily.
   _diffCache = null;
-  if (_mode === 'diff') {
-    if (document.getElementById('view-mode-sel').value === 'mirror') {
-      _renderMirror('diff-plot', 'Difference: Sample A − Sample B');
-    } else {
-      _requestDiff();
-    }
-  }
+  if (_mode === 'diff') _maybeRequestDiff();
 }
 
 function specRenderAll() {
-  renderSpec('a');
-  renderSpec('b');
+  _panelIdsForMode().forEach(renderSpec);
   if (_mode !== 'diff') return;
   if (document.getElementById('view-mode-sel').value === 'mirror') {
-    _renderMirror('diff-plot', 'Difference: Sample A − Sample B');
+    _renderMirror('diff-plot', _diffTitle());
   } else if (_diffCache) {
-    _renderGrid('diff-plot', _diffCache, 'Difference: Sample A − Sample B', true);
+    _renderGrid('diff-plot', _diffCache, _diffTitle(), true);
   }
 }
 
-function updateChanBtn(slot) {
-  const btn = document.getElementById(`chan-btn-${slot}`);
-  btn.textContent = slots[slot].showChannel === 'l' ? 'Show R ▶' : '◀ Show L';
-}
-
-window.specToggleChannel = function(slot) {
-  const s = slots[slot];
-  s.showChannel = s.showChannel === 'l' ? 'r' : 'l';
-  updateChanBtn(slot);
-  renderSpec(slot);
-  // Switching channel changed which data feeds the shared range (see
-  // _sharedSampleRange) — refresh the other panel so it stays in sync.
-  const other = slot === 'a' ? 'b' : 'a';
-  if (slots[other].lCache || slots[other].rCache) renderSpec(other);
+window.specToggleChannel = function(id) {
+  const f = _getFile(id);
+  if (!f) return;
+  f.showChannel = f.showChannel === 'l' ? 'r' : 'l';
+  _renderFileList();
+  const shown = _panelIdsForMode();
+  if (shown.includes(id)) shown.forEach(renderSpec);
 };
 
 window.specToggleFreqScale = function() {
@@ -648,32 +683,52 @@ window.specToggleFreqScale = function() {
   specRenderAll();
 };
 
-// ── Compare vs Single vs Difference mode ────────────────────────────────
-// Difference computes Sample A's spectrogram minus Sample B's (interpolated
-// onto A's frequency/time grid — see main.py's _compute_diff) so intensity
-// differences show as "mountains and valleys" rather than raw dB.
-// Single reuses the same two panels as Compare (no separate plots/render
-// path to maintain) — it just hides one side via CSS so the other fills
-// the width.
-let _mode = 'single';        // 'compare' | 'single' | 'diff'
-let _singleSlot = 'a';       // which sample Single mode shows
+// ── Single vs Compare vs Difference vs Live mode ────────────────────────
+// Single shows the "focused" file (click a name in the sidebar), full
+// width. Compare stacks up to 4 sidebar-checked files as rows. Difference
+// computes ①'s spectrogram minus ②'s (interpolated onto ①'s frequency/time
+// grid — see main.py's _compute_diff) so intensity differences show as
+// "mountains and valleys" rather than raw dB.
 let _diffCache = null;
 
-function _applySingleClass() {
-  const el = document.getElementById('compare-view');
-  el.classList.remove('single-a', 'single-b');
-  if (_mode === 'single') el.classList.add('single-' + _singleSlot);
+function _panelIdsForMode() {
+  if (_mode === 'single') return _focusedId != null ? [_focusedId] : [];
+  if (_mode === 'compare') return _files.filter(f => f.compareSelected).slice(0, 4).map(f => f.id);
+  return [];
 }
 
-window.specSetSingleSlot = function(slot) {
-  _singleSlot = slot;
-  document.getElementById('single-a-btn').classList.toggle('active', slot === 'a');
-  document.getElementById('single-b-btn').classList.toggle('active', slot === 'b');
-  _applySingleClass();
-  [`waveform-plot-${slot}`, `spec-plot-${slot}`].forEach(id => {
-    const el = document.getElementById(id); if (el) setTimeout(() => Plotly.Plots.resize(el), 0);
+function _rebuildComparePanels() {
+  const el = document.getElementById('compare-view');
+  const ids = _panelIdsForMode();
+  if (!ids.length) {
+    el.innerHTML = `<div class="sp-file-empty" style="margin:auto;font-size:12px">` +
+      (_mode === 'single' ? 'Load a file, or hit Record, to see its spectrogram'
+        : 'Tick the checkbox on up to 4 sidebar files to compare them') +
+      `</div>`;
+    return;
+  }
+  el.innerHTML = ids.map(id => {
+    const f = _getFile(id);
+    return `<div class="sp-panel" data-file-id="${id}">
+      <div class="sp-plot-row sp-spec-row"><div id="spec-plot-${id}" class="plot-div"></div></div>
+      <div class="sp-panel-frameinfo" id="frame-info-${id}">–</div>
+    </div>`;
+  }).join('');
+  ids.forEach(id => {
+    const f = _getFile(id);
+    Plotly.newPlot(`spec-plot-${id}`, [], _wl(`#${_fileNum(id)} ${f.name}`, 'Time (s)', 'Frequency (Hz)'), _pcfg);
+    renderSpec(id);
   });
-};
+}
+
+function _diffTitle() {
+  const a = _getFile(_diffId1), b = _getFile(_diffId2);
+  return `Difference: ${a ? '①' + a.name : '①'} − ${b ? '②' + b.name : '②'}`;
+}
+
+function _updateDiffTitle() {
+  document.getElementById('diff-title').textContent = _diffTitle();
+}
 
 window.specSetMode = function(mode) {
   const prevMode = _mode;
@@ -685,21 +740,17 @@ window.specSetMode = function(mode) {
   document.getElementById('compare-view').style.display = (mode === 'diff' || mode === 'live') ? 'none' : '';
   document.getElementById('diff-view').style.display = mode === 'diff' ? '' : 'none';
   document.getElementById('live-view').style.display = mode === 'live' ? '' : 'none';
-  document.getElementById('single-slot-group').style.display = mode === 'single' ? '' : 'none';
-  _applySingleClass();
   _updateMirrorAxisBtn();
   _updateMirror3DBtn();
   _updateMirrorStyleBtn();
   // Leaving Live mode releases the mic promptly rather than leaving it hot
   // in the background — same reasoning as the beforeunload safety net below.
   if (prevMode === 'live' && mode !== 'live' && _liveActive) stopLiveView();
+  if (mode === 'single' || mode === 'compare') _rebuildComparePanels();
   if (mode === 'diff') {
     _updateDiffLegend();
-    if (document.getElementById('view-mode-sel').value === 'mirror') {
-      _renderMirror('diff-plot', 'Difference: Sample A − Sample B');
-    } else {
-      _requestDiff();
-    }
+    _updateDiffTitle();
+    _maybeRequestDiff();
     // diff-view was just unhidden — its container had no measurable size
     // while display:none, so the plot just drawn needs an explicit resize.
     const el = document.getElementById('diff-plot');
@@ -707,18 +758,23 @@ window.specSetMode = function(mode) {
   } else if (mode === 'live') {
     const el = document.getElementById('live-plot');
     if (el) setTimeout(() => Plotly.Plots.resize(el), 0);
-  } else {
-    ['waveform-plot-a', 'spec-plot-a', 'waveform-plot-b', 'spec-plot-b'].forEach(id => {
-      const el = document.getElementById(id); if (el) Plotly.Plots.resize(el);
-    });
   }
 };
 
-function _requestDiff() {
-  if (!slots.a.samples || !slots.b.samples) {
-    const el = document.getElementById('diff-status');
-    el.textContent = 'load or record both samples first';
+function _maybeRequestDiff() {
+  _updateDiffTitle();
+  const a = _getFile(_diffId1), b = _getFile(_diffId2);
+  const el = document.getElementById('diff-status');
+  if (!a || !b || !a.samples || !b.samples) {
+    el.textContent = 'choose two loaded files in the sidebar (① and ②)';
     el.className = 'sp-panel-status';
+    _diffCache = null;
+    if (document.getElementById('view-mode-sel').value === 'mirror') _renderMirror('diff-plot', _diffTitle());
+    else Plotly.react('diff-plot', [], _wl(_diffTitle(), '', '', {}), _pcfg);
+    return;
+  }
+  if (document.getElementById('view-mode-sel').value === 'mirror') {
+    _renderMirror('diff-plot', _diffTitle());
     return;
   }
   if (!window.pySpecComputeDiff) return;
@@ -726,18 +782,17 @@ function _requestDiff() {
   const hop  = +document.getElementById('hop-sel').value;
   const fMax = +document.getElementById('fmax-inp').value;
   const semitones = +document.getElementById('semitone-sel').value;
-  const el = document.getElementById('diff-status');
   el.textContent = 'computing…';
   el.className = 'sp-panel-status';
-  window.pySpecComputeDiff(nFft, hop, fMax, semitones);
+  window.pySpecComputeDiff(_diffId1, _diffId2, nFft, hop, fMax, semitones);
 }
 
 window.onSpecDiffResult = function(times_js, freqs_js, flatZ_js, nFreqs, nTimes) {
   _diffCache = _unpackSpec(times_js, freqs_js, flatZ_js, nFreqs, nTimes);
   const el = document.getElementById('diff-status');
-  el.textContent = 'A − B';
+  el.textContent = '① − ②';
   el.className = 'sp-panel-status ok';
-  if (_mode === 'diff') _renderGrid('diff-plot', _diffCache, 'Difference: Sample A − Sample B', true);
+  if (_mode === 'diff') _renderGrid('diff-plot', _diffCache, _diffTitle(), true);
 };
 
 window.onSpecDiffError = function(msg) {
@@ -746,12 +801,90 @@ window.onSpecDiffError = function(msg) {
   el.className = 'sp-panel-status err';
 };
 
+// ── Sidebar file list (Explore-style) ───────────────────────────────────
+function _renderFileList() {
+  const box = document.getElementById('file-list');
+  if (!_files.length) {
+    box.innerHTML = '<div class="sp-file-empty">Load a file, or hit Record, to get started</div>';
+    return;
+  }
+  box.innerHTML = _files.map((f, i) => {
+    const num = i + 1;
+    return `<div class="sp-file-row${f.id === _focusedId ? ' focused' : ''}${f.recording ? ' recording' : ''}" data-id="${f.id}">
+      <div class="sp-file-row-top">
+        <span class="sp-file-num">${num}.</span>
+        <input type="checkbox" class="sp-file-cmp" data-id="${f.id}"${f.compareSelected ? ' checked' : ''} title="Select for Compare (up to 4 at once)">
+        <span class="sp-file-name" data-id="${f.id}" title="${_esc(f.name)} — click to focus in Single view">${_esc(f.name)}</span>
+        <button class="sp-file-remove" data-id="${f.id}" title="Remove" ${f.recording ? 'disabled' : ''}>✕</button>
+      </div>
+      <div class="sp-file-status ${f.statusCls}">${_esc(f.status)}</div>
+      <div class="sp-file-row-ctl">
+        <button class="sp-file-ctl-btn play-btn" data-id="${f.id}" ${f.samples ? '' : 'disabled'} title="Play/pause">${_playingId === f.id ? '■' : '▶'}</button>
+        ${f.isStereo ? `<button class="sp-file-ctl-btn chan-btn" data-id="${f.id}" title="Toggle L/R channel">${f.showChannel === 'l' ? 'L' : 'R'}</button>` : ''}
+        <span class="sp-file-ctl-gap"></span>
+        <button class="sp-file-ctl-btn diff1-btn${_diffId1 === f.id ? ' on-1' : ''}" data-id="${f.id}" title="Use as ① in Difference/Mirror">①</button>
+        <button class="sp-file-ctl-btn diff2-btn${_diffId2 === f.id ? ' on-2' : ''}" data-id="${f.id}" title="Use as ② in Difference/Mirror">②</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  box.querySelectorAll('.sp-file-cmp').forEach(cb => cb.addEventListener('change', e => _toggleCompareSelect(e.target.dataset.id, e.target.checked)));
+  box.querySelectorAll('.sp-file-name').forEach(el => el.addEventListener('click', e => _focusFile(e.target.dataset.id)));
+  box.querySelectorAll('.sp-file-remove').forEach(el => el.addEventListener('click', e => _removeFile(e.target.dataset.id)));
+  box.querySelectorAll('.play-btn').forEach(el => el.addEventListener('click', e => togglePlay(e.target.dataset.id)));
+  box.querySelectorAll('.chan-btn').forEach(el => el.addEventListener('click', e => window.specToggleChannel(e.target.dataset.id)));
+  box.querySelectorAll('.diff1-btn').forEach(el => el.addEventListener('click', e => _setDiffSlot(e.target.dataset.id, 1)));
+  box.querySelectorAll('.diff2-btn').forEach(el => el.addEventListener('click', e => _setDiffSlot(e.target.dataset.id, 2)));
+}
+
+function _toggleCompareSelect(id, checked) {
+  const f = _getFile(id);
+  if (!f) return;
+  if (checked && _files.filter(x => x.compareSelected).length >= 4) checked = false;   // cap at 4
+  f.compareSelected = checked;
+  _renderFileList();
+  if (_mode === 'compare') _rebuildComparePanels();
+}
+
+function _focusFile(id) {
+  if (_focusedId === id) return;
+  _focusedId = id;
+  _renderFileList();
+  if (_mode === 'single') _rebuildComparePanels();
+}
+
+function _removeFile(id) {
+  const f = _getFile(id);
+  if (!f || f.recording) return;
+  _files = _files.filter(x => x.id !== id);
+  if (_focusedId === id) _focusedId = _files[0] ? _files[0].id : null;
+  if (_diffId1 === id) _diffId1 = null;
+  if (_diffId2 === id) _diffId2 = null;
+  if (_playingId === id) _stopPlayback();
+  _renderFileList();
+  if (_mode === 'single' || _mode === 'compare') _rebuildComparePanels();
+  if (_mode === 'diff') { _diffCache = null; _maybeRequestDiff(); }
+}
+
+function _setDiffSlot(id, which) {
+  if (which === 1) {
+    if (_diffId2 === id) _diffId2 = null;
+    _diffId1 = _diffId1 === id ? null : id;   // clicking the active role again clears it
+  } else {
+    if (_diffId1 === id) _diffId1 = null;
+    _diffId2 = _diffId2 === id ? null : id;
+  }
+  _diffCache = null;
+  _renderFileList();
+  if (_mode === 'diff') _maybeRequestDiff();
+}
+
 // ── Live microphone — shared low-level engine ───────────────────────────
 // Mirrors Acquire's AudioWorkletNode capture pattern (Web/tools/acquire/acquire.js):
 // an inline worklet posts raw Float32 audio, batched here into fixed-size chunks.
-// Two consumers share this one engine — per-slot Recording (below) and the
-// standalone Live view (further below) — since there's only one physical
-// microphone; whichever starts first holds it until it stops.
+// Two consumers share this one engine — Recording (below) and the standalone
+// Live view (further below) — since there's only one physical microphone;
+// whichever starts first holds it until it stops.
 const MIC_WORKLET_SRC = `
 class SpecCaptureProcessor extends AudioWorkletProcessor {
   process(inputs) {
@@ -764,7 +897,7 @@ registerProcessor('spec-capture', SpecCaptureProcessor);
 `;
 const MIC_BATCH_SIZE = 4096;
 
-let _micUser = null;   // 'a' | 'b' | 'live' | null — who currently holds the mic
+let _micUser = null;   // a slot id, 'live', or null — who currently holds the mic
 let _micStream = null, _micCtx = null, _micSource = null, _micWorklet = null;
 let _micBatch = null, _micBatchFill = 0, _micSr = 48000;
 let _micOnBatch = null;   // callback(Float32Array) — a full MIC_BATCH_SIZE batch
@@ -818,34 +951,41 @@ function _micRelease() {
   _micUser = null;
 }
 
-// ── Per-slot recording ───────────────────────────────────────────────────
+// ── Recording — adds a new numbered file to the list ────────────────────
 // Batches are (a) pushed to Python (pySpecMicPush) for a live rolling-window
 // preview, using the same canonical compute_spectrogram() as everywhere
-// else, and (b) kept in full so that on Stop the complete clip becomes that
-// slot's sample (pySpecFinalizeRecording), just like a loaded file.
-let _recordingSlot = null;
+// else, and (b) kept in full so that on Stop the complete clip becomes the
+// new file's sample (pySpecFinalizeRecording), just like a loaded file.
+let _recordingId = null;
 let _micFullChunks = [], _micFullLen = 0;
 
-async function startRecording(slot) {
+async function startRecording() {
   if (_micUser) return;
+  const id = String(_nextId++);
+  const f = _freshFile(id, 'Recording…');
+  f.recording = true; f.status = 'listening…'; f.statusCls = 'ok';
+  _files.push(f);
+  _autoAssignNewFile(f);
+  _renderFileList();
+  if (_mode === 'single' || _mode === 'compare') _rebuildComparePanels();
   try {
     _micFullChunks = []; _micFullLen = 0;
-    const sr = await _micAcquire(slot, batch => {
+    const sr = await _micAcquire(id, batch => {
       _micFullChunks.push(batch); _micFullLen += batch.length;
       if (window.pySpecMicPush) window.pySpecMicPush(batch);
     });
-    if (window.pySpecMicStart) window.pySpecMicStart(slot, sr);
-    _recordingSlot = slot;
-    _enterRecordingUI(slot);
+    if (window.pySpecMicStart) window.pySpecMicStart(id, sr);
+    _recordingId = id;
+    _enterRecordingUI();
   } catch (e) {
-    setSt(slot, 'mic error: ' + e.message.slice(0, 60), 'err');
-    stopRecording();
+    f.status = 'mic error: ' + e.message.slice(0, 60); f.statusCls = 'err'; f.recording = false;
+    _renderFileList();
   }
 }
 
 function stopRecording() {
-  const slot = _recordingSlot;
-  if (!slot) return;
+  const id = _recordingId;
+  if (!id) return;
   const sr = _micSr;
   _micRelease();
   if (window.pySpecMicStop) window.pySpecMicStop();
@@ -855,62 +995,50 @@ function stopRecording() {
   for (const c of _micFullChunks) { full.set(c, off); off += c.length; }
   _micFullChunks = []; _micFullLen = 0;
 
-  _recordingSlot = null;
-  _exitRecordingUI(slot);
+  _recordingId = null;
+  _exitRecordingUI();
+  const f = _getFile(id);
+  if (f) f.recording = false;
 
   if (full.length > 0 && window.pySpecFinalizeRecording) {
-    setSt(slot, 'processing recording…');
-    window.pySpecFinalizeRecording(slot, full, sr);
+    if (f) { f.status = 'processing recording…'; f.statusCls = ''; }
+    _renderFileList();
+    window.pySpecFinalizeRecording(id, full, sr);
   } else {
-    setSt(slot, 'no audio captured', 'err');
+    if (f) { f.status = 'no audio captured'; f.statusCls = 'err'; }
+    _renderFileList();
   }
 }
 
-window.specToggleRecord = function(slot) {
-  if (_recordingSlot === slot) stopRecording();
-  else if (!_micUser) startRecording(slot);
+window.specToggleRecord = function() {
+  if (_recordingId) stopRecording();
+  else if (!_micUser) startRecording();
 };
 
-function _enterRecordingUI(slot) {
-  const other = slot === 'a' ? 'b' : 'a';
-  const btn = document.getElementById(`mic-btn-${slot}`);
+function _enterRecordingUI() {
+  const btn = document.getElementById('record-btn');
   btn.textContent = '⏹ Stop';
   btn.classList.add('recording');
-  document.getElementById(`file-btn-label-${slot}`).style.display = 'none';
-  document.getElementById(`mic-btn-${other}`).disabled = true;
-  document.getElementById(`play-btn-${slot}`).disabled = true;
-  document.getElementById(`chan-btn-${slot}`).style.display = 'none';
   const liveBtn = document.getElementById('live-btn');
   if (liveBtn) liveBtn.disabled = true;
-  // Recordings are mono (channel 'l' only) — if this slot was showing a
-  // stereo file's R channel, reset to 'l' or the live preview would never
-  // render (onSpecSpectrogramResult only renders when channel === showChannel).
-  slots[slot].samples = null;
-  slots[slot].showChannel = 'l';
-  slots[slot].rCache = null;
-  Plotly.react(`waveform-plot-${slot}`, [], _wl('Waveform — shown once recording stops', 'Time (s)', 'Amplitude'), _pcfg);
-  setSt(slot, 'listening…', 'ok');
 }
 
-function _exitRecordingUI(slot) {
-  const other = slot === 'a' ? 'b' : 'a';
-  const btn = document.getElementById(`mic-btn-${slot}`);
+function _exitRecordingUI() {
+  const btn = document.getElementById('record-btn');
   btn.textContent = '🎤 Record';
   btn.classList.remove('recording');
-  document.getElementById(`file-btn-label-${slot}`).style.display = '';
-  document.getElementById(`mic-btn-${other}`).disabled = false;
   const liveBtn = document.getElementById('live-btn');
   if (liveBtn) liveBtn.disabled = false;
 }
 
 // ── Standalone Live view ─────────────────────────────────────────────────
 // A dedicated "just watch the mic" mode for dialing in FFT window/hop/max-
-// freq/smoothing/colorscale quickly, without loading the result into Sample
-// A or B. Reuses the exact same rolling-window ring buffer and throttled
-// compute_spectrogram() in main.py that per-slot recording's live preview
-// already uses (pySpecMicStart/Push/Stop, keyed by a 'live' pseudo-slot) —
-// settings changes take effect on the very next push since _mic_push always
-// reads the current saved settings, so no Python changes were needed here.
+// freq/smoothing/colorscale quickly, without adding anything to the file
+// list. Reuses the exact same rolling-window ring buffer and throttled
+// compute_spectrogram() in main.py that Recording's live preview already
+// uses (pySpecMicStart/Push/Stop, keyed by a 'live' pseudo-slot) — settings
+// changes take effect on the very next push since _mic_push always reads
+// the current saved settings, so no Python changes were needed here.
 let _liveActive = false;
 
 async function startLiveView() {
@@ -949,7 +1077,8 @@ function _enterLiveUI() {
   const st = document.getElementById('live-status');
   st.textContent = 'listening…';
   st.className = 'sp-panel-status ok';
-  ['mic-btn-a', 'mic-btn-b'].forEach(id => { document.getElementById(id).disabled = true; });
+  const recordBtn = document.getElementById('record-btn');
+  if (recordBtn) recordBtn.disabled = true;
 }
 
 function _exitLiveUI() {
@@ -959,10 +1088,11 @@ function _exitLiveUI() {
   const st = document.getElementById('live-status');
   st.textContent = 'stopped';
   st.className = 'sp-panel-status';
-  ['mic-btn-a', 'mic-btn-b'].forEach(id => { document.getElementById(id).disabled = false; });
+  const recordBtn = document.getElementById('record-btn');
+  if (recordBtn) recordBtn.disabled = false;
 }
 
-// ── Preferences modal ────────────────────────────────────────────────
+// ── Settings / Info modals ──────────────────────────────────────────────
 window.specPreferences = function() {
   document.getElementById('prefs-modal').classList.add('open');
 };
@@ -984,25 +1114,58 @@ window.specResetPrefs = function() {
   specSettingsChanged();
   specRenderAll();
 };
+window.specShowInfo = function() {
+  document.getElementById('info-modal').classList.add('open');
+};
+window.specCloseInfo = function() {
+  document.getElementById('info-modal').classList.remove('open');
+};
 
-// ── Playback ──────────────────────────────────────────────────────────
-function togglePlay(slot) {
-  const s = slots[slot];
-  if (!s.samples) return;
-  player.toggle(slot, s.samples, s.sr, s.isStereo ? 2 : 1);
+// ── Playback ─────────────────────────────────────────────────────────────
+// A small self-contained player rather than the shared AudioPlayer utility
+// (js/audio.js) — AudioPlayer needs a fixed key→button-id map at
+// construction time, which doesn't fit a file list that grows and shrinks
+// at runtime. This mirrors what AudioPlayer.start() does internally.
+let _playCtx = null, _playSource = null, _playingId = null;
+
+function _stopPlayback() {
+  if (_playSource) { try { _playSource.stop(); } catch (_) {} _playSource = null; }
+  _playingId = null;
+}
+
+function togglePlay(id) {
+  const f = _getFile(id);
+  if (!f || !f.samples) return;
+  if (_playingId === id) { _stopPlayback(); _renderFileList(); return; }
+  _stopPlayback();
+  if (!_playCtx) _playCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (_playCtx.state === 'suspended') _playCtx.resume();
+  const channels = f.isStereo ? 2 : 1;
+  const nFrames = Math.floor(f.samples.length / channels);
+  const buf = _playCtx.createBuffer(channels, nFrames, f.sr);
+  if (channels === 1) {
+    buf.copyToChannel(f.samples, 0);
+  } else {
+    for (let ch = 0; ch < channels; ch++) {
+      const chBuf = new Float32Array(nFrames);
+      for (let i = 0; i < nFrames; i++) chBuf[i] = f.samples[i * channels + ch];
+      buf.copyToChannel(chBuf, ch);
+    }
+  }
+  const src = _playCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(_playCtx.destination);
+  src.onended = () => { if (_playingId === id) { _playingId = null; _renderFileList(); } };
+  src.start();
+  _playSource = src;
+  _playingId = id;
+  _renderFileList();
 }
 
 // ── Help ──────────────────────────────────────────────────────────────
 window.specHelp = function() {
   window.open('https://github.com/chrisbuerginrogers/ObieApp', '_blank');
 };
-
-// ── UI helpers ────────────────────────────────────────────────────────
-function setSt(slot, txt, cls) {
-  const el = document.getElementById(`wav-status-${slot}`);
-  el.textContent = txt;
-  el.className = 'sp-panel-status' + (cls ? ' ' + cls : '');
-}
 
 // Python signals ready. Restore saved FFT settings (from localStorage via config.py).
 window.onPythonReady = function() {
@@ -1031,9 +1194,10 @@ function _initResizer() {
     if (!dragging) return;
     const w = Math.max(160, Math.min(360, startW + (e.clientX - startX)));
     sidebar.style.width = w + 'px';
-    ['waveform-plot-a', 'spec-plot-a', 'waveform-plot-b', 'spec-plot-b', 'diff-plot'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) Plotly.Plots.resize(el);
+    const ids = ['diff-plot', 'live-plot', ..._panelIdsForMode().map(id => `spec-plot-${id}`)];
+    ids.forEach(pid => {
+      const el = document.getElementById(pid);
+      if (el && el.data) Plotly.Plots.resize(el);
     });
   });
   document.addEventListener('mouseup', () => {
@@ -1053,9 +1217,10 @@ document.addEventListener('click', e => {
 // ── Boot ──────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   _initResizer();
-  specSetMode('single');   // matches the HTML's default active button/classes
+  _renderFileList();
+  specSetMode('single');   // matches the HTML's default active button
 });
 window.addEventListener('beforeunload', () => {
-  if (_recordingSlot) stopRecording();
+  if (_recordingId) stopRecording();
   if (_liveActive) stopLiveView();
 });

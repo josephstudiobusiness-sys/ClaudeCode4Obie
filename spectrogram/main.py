@@ -11,13 +11,14 @@ Python-side responsibilities:
                                             (_frf_to_ir, _minimum_phase)
   - Compute the STFT spectrogram         → Python/processing/spectrogram.py
   - Roll a live-mic ring buffer and recompute its spectrogram on each push
-  - Diff two slots' spectrograms (Sample A − Sample B), resampled onto a
-    shared grid, for the "Difference" view
+  - Diff two chosen files' spectrograms, resampled onto a shared grid, for
+    the "Difference" view
 
-There are two independent "slots" ('a' and 'b') so two samples — each loaded
-from a file or recorded from the mic — can be compared side by side. Both
-slots share one set of FFT settings (n_fft/hop/f_max) so the comparison is
-apples-to-apples.
+An arbitrary number of files can be loaded (each loaded from a file or
+recorded from the mic), tracked as "slots" keyed by a JS-assigned id string.
+All slots share one set of FFT settings (n_fft/hop/f_max) so any comparison
+is apples-to-apples. The Difference view operates on whichever two slot ids
+the UI passes in — there's no fixed "Sample A"/"Sample B" on the Python side.
 
 All of the above delegate to the canonical ObieApp implementations, loaded
 from GitHub via pyscript.toml — no signal processing is reimplemented here.
@@ -50,11 +51,11 @@ configure('obieWebApp_spectrogram', {
 # OBIE_META block), which we use when present; otherwise this is our fallback.
 _DEFAULT_FRF_SR = 48000
 
-# ── Module-level state — one entry per slot ('a' / 'b') ─────────────────────
-_slots = {
-    'a': {'sr': None, 'l': None, 'r': None},   # l/r: np.ndarray float64 [-1,1], or None
-    'b': {'sr': None, 'l': None, 'r': None},
-}
+# ── Module-level state — one entry per loaded file, keyed by its JS-assigned
+# id (a string, e.g. "1", "2", …) — an arbitrary number of files can be
+# loaded, not just a fixed two, so entries are created on demand rather than
+# pre-populated for two fixed slots.
+_slots = {}   # slot -> {'sr': int, 'l': np.ndarray float64 [-1,1], 'r': np.ndarray or None}
 
 
 def _to_float32(data):
@@ -115,9 +116,7 @@ def _compute_slot(slot, n_fft, hop, f_max, semitones=0):
 
 
 def _store_sample(slot, sr, l, r, play_samples, n_channels, info, stereo):
-    _slots[slot]['sr'] = sr
-    _slots[slot]['l']  = l
-    _slots[slot]['r']  = r
+    _slots[slot] = {'sr': sr, 'l': l, 'r': r}
     js.window.onSpecSampleResult(slot, to_js(play_samples), sr, n_channels, info, stereo)
     prefs = cfg_load('settings')
     _compute_slot(slot, prefs['n_fft'], prefs['hop'], prefs['f_max'], prefs.get('semitones', 0))
@@ -331,7 +330,7 @@ js.window.pySpecRecompute = create_proxy(_recompute)
 _MIC_WINDOW_S        = 5.0
 _MIC_RECOMPUTE_EVERY = 3   # throttle: recompute every Nth push, not every push
 
-_mic_slot    = None   # 'a' | 'b' | None
+_mic_slot    = None   # a slot id string, or None when not recording
 _mic_sr      = None
 _mic_size    = 0
 _mic_buf     = None   # np.ndarray float64, rolling window, oldest-first
@@ -376,7 +375,7 @@ def _mic_push(samples_js):
         _send_spectrogram(_mic_slot, 'l', window, _mic_sr, int(prefs['n_fft']),
                            int(prefs['hop']), float(prefs['f_max']), prefs.get('semitones', 0))
     except Exception as exc:
-        js.window.onSpecError(_mic_slot or 'a', str(exc)[:160])
+        js.window.onSpecError(_mic_slot or 'live', str(exc)[:160])
 
 
 def _mic_stop():
@@ -392,13 +391,15 @@ js.window.pySpecMicPush  = create_proxy(_mic_push)
 js.window.pySpecMicStop  = create_proxy(_mic_stop)
 
 
-# ── Difference view — Sample A's spectrogram minus Sample B's ──────────────
-# Both slots share FFT settings, but can differ in sample rate and/or clip
-# length (their frequency bins and time frames won't line up 1:1), so B is
-# resampled onto A's (frequency, time) grid via linear interpolation before
-# subtracting — same idea as a "regrid then diff" step, just done with
-# np.interp rather than a heavier 2-D interpolator (fine for a display-only
-# diff; edges of B outside A's coverage hold at B's boundary value).
+# ── Difference view — one chosen file's spectrogram minus another's ────────
+# The user picks which two loaded files are "1" and "2" from the sidebar
+# list (there's no fixed Sample A/B anymore). Both share FFT settings, but
+# can differ in sample rate and/or clip length (their frequency bins and
+# time frames won't line up 1:1), so #2 is resampled onto #1's (frequency,
+# time) grid via linear interpolation before subtracting — same idea as a
+# "regrid then diff" step, just done with np.interp rather than a heavier
+# 2-D interpolator (fine for a display-only diff; edges of #2 outside #1's
+# coverage hold at #2's boundary value).
 
 def _interp_grid_to(freqs_b, times_b, S_db_b, freqs_a, times_a):
     """Resample S_db_b (n_freqs_b × n_times_b) onto the (freqs_a, times_a) grid."""
@@ -411,10 +412,11 @@ def _interp_grid_to(freqs_b, times_b, S_db_b, freqs_a, times_a):
     return by_time
 
 
-def _compute_diff(n_fft_js, hop_js, fmax_js, semitones_js=0):
-    a, b = _slots['a'], _slots['b']
-    if a['l'] is None or b['l'] is None:
-        js.window.onSpecDiffError('load or record both Sample A and Sample B first')
+def _compute_diff(slot_a_js, slot_b_js, n_fft_js, hop_js, fmax_js, semitones_js=0):
+    slot_a, slot_b = str(slot_a_js), str(slot_b_js)
+    a, b = _slots.get(slot_a), _slots.get(slot_b)
+    if not a or not b or a['l'] is None or b['l'] is None:
+        js.window.onSpecDiffError('choose two loaded files to compare (① and ②)')
         return
     n_fft, hop, f_max, semitones = int(n_fft_js), int(hop_js), float(fmax_js), float(semitones_js)
     try:
