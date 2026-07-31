@@ -70,30 +70,44 @@ Sample A, Sample B, or the Difference view:
   waterfall isn't a time/frequency grid, each line *is* one time slice, so
   there's no "which axis is time" to flip.
 - **Mirror (A | B)** — *Difference view only.* Rather than subtracting A
-  from B, this shows both samples' own spectrograms side by side around a
-  centre line, so you compare shapes directly instead of reading a computed
-  difference. A **Mirror: Frequency / Time** toolbar button (visible only in
-  this mode) toggles which axis is shared:
-  - **Frequency** (default) — a population-pyramid-style plot: Y=frequency
-    (shared), and for each bin a filled line extends left for Sample A,
-    right for Sample B (red/blue, matching the Difference legend). Time is
-    collapsed to a mean. A second toolbar button, **Mirror: Independent /
-    Signed Diff** (visible only in this Frequency sub-mode), picks what's
-    actually plotted:
-    - **Independent** (default) — each sample's own time-averaged level,
-      unrelated curves — good for comparing overall shape/timbre.
-    - **Signed Diff** — a true `A − B` subtraction (B's average linearly
-      interpolated onto A's frequency bins first, matching the numeric
-      Difference view's approach), split left/right by sign so it still
-      reads red=A-louder/blue=B-louder, but now the two sides are a single
-      mirrored quantity rather than independent curves.
-  - **Time** — X=time (shared), and each side is a full heatmap with
-    frequency (Y) increasing outward from the centre line — Sample A
-    mirrored below, Sample B normal above. (Linear frequency axis only here
-    — log is undefined for the negative/mirrored side. No Independent/
-    Signed-Diff toggle here — a per-(time,freq) mirrored heatmap doesn't
-    have the same single-value-per-point ambiguity the frequency-axis
-    pyramid does.)
+  from B, this shows both samples' own spectrograms directly, arranged
+  around a centre line/plane, so you compare shapes visually instead of (or
+  alongside) reading a computed difference. Two independent toolbar toggles
+  (visible only in this mode) control how:
+  - **Mirror: Independent / Signed Diff** — what's actually plotted.
+    **Independent** (default) shows each sample's own values, unrelated to
+    each other — good for comparing overall shape/timbre. **Signed Diff**
+    shows a true `A − B` subtraction instead — the same computation as the
+    numeric Difference view (interpolated onto a shared grid), just routed
+    through Mirror's layout.
+  - **Mirror: Flat / 3D Surface** — 2D chart vs literal 3D terrain.
+    **Flat** (default) draws a 2D chart, and a second toggle, **Mirror:
+    Frequency / Time**, then picks which axis is shared:
+    - **Frequency** — a population-pyramid-style plot: Y=frequency (shared),
+      and for each bin a filled line extends left for Sample A, right for
+      Sample B (red/blue, matching the Difference legend). Time is
+      collapsed to a mean (Independent: each sample's own average; Signed
+      Diff: `avg(A) − avg(B)` per frequency bin, split left/right by sign).
+    - **Time** — X=time (shared), and each side is a full heatmap with
+      frequency (Y) increasing outward from the centre line — Sample A
+      mirrored below, Sample B normal above. Linear frequency axis only
+      here (log is undefined for the negative/mirrored side), and no
+      Independent/Signed-Diff distinction (a per-(time,freq) mirrored
+      heatmap doesn't have the same single-value-per-point ambiguity the
+      frequency-axis pyramid does).
+
+    **3D Surface** ignores the Frequency/Time axis choice — a literal
+    surface doesn't need 2D's left-right/top-bottom trick to visually
+    separate A and B, since overlap plus rotation already does that job.
+    Independent renders **two semi-transparent surfaces** overlaid in one
+    scene (Sample A red, Sample B blue, X=time/Y=frequency/Z=dB) — the
+    whole time-resolved terrain for each sample, not just a time-averaged
+    snapshot, so you can rotate around to see exactly where one pokes above
+    the other. Signed Diff renders **one surface** — reusing the exact same
+    full-resolution `A − B` grid the numeric Difference view's own 3D
+    Surface uses (not a separate computation), so switching to Mirror's 3D
+    Signed Diff and to ⛰ Difference → Plot type: 3D Surface show identical
+    data, just reached two different ways.
 
 ### Difference mode
 

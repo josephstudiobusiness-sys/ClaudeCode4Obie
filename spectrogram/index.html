@@ -56,9 +56,11 @@
     </div>
     <div class="tb-flex"></div>
     <button id="mirror-style-btn" class="tb-btn" onclick="specToggleMirrorStyle()" style="display:none"
-            title="Toggle Mirror-by-frequency between two independent curves and a true signed A&#8722;B subtraction">Mirror: Independent</button>
+            title="Toggle Mirror between two independent curves/surfaces and a true signed A&#8722;B subtraction">Mirror: Independent</button>
+    <button id="mirror-3d-btn" class="tb-btn" onclick="specToggleMirror3D()" style="display:none"
+            title="Toggle Mirror between a flat 2D chart and literal 3D surfaces">Mirror: Flat</button>
     <button id="mirror-axis-btn" class="tb-btn" onclick="specToggleMirrorAxis()" style="display:none"
-            title="Toggle which axis Sample A and Sample B share in Mirror view">Mirror: Frequency</button>
+            title="Toggle which axis Sample A and Sample B share in flat Mirror view">Mirror: Frequency</button>
     <button id="freq-scale-btn" class="tb-btn" onclick="specToggleFreqScale()"
             title="Toggle spectrogram frequency axis between linear and log">Freq: Lin</button>
     <button class="tb-btn" onclick="specPreferences()">Settings</button>

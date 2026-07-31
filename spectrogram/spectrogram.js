@@ -108,6 +108,11 @@ window.onSpecSampleResult = function(slot, samplesArr, sr, nChannels, info, ster
   document.getElementById(`chan-btn-${slot}`).style.display = s.isStereo ? '' : 'none';
   updateChanBtn(slot);
   plotWaveform(slot);
+  // A changed sample invalidates any cached numeric diff grid, regardless of
+  // which mode is active right now — otherwise switching into Difference
+  // mode later (or Mirror's 3D Signed-Diff style, which reads _diffCache
+  // directly) could render a stale A−B computed against the old sample.
+  _diffCache = null;
   if (_mode === 'diff') _requestDiff();
 };
 
@@ -213,12 +218,15 @@ function _waterfallTraces(freqs, times, zT, isDiff) {
   return traces;
 }
 
-function _renderGrid(divId, cache, title, isDiff) {
-  let mode = document.getElementById('view-mode-sel').value;
+function _renderGrid(divId, cache, title, isDiff, forceMode) {
+  let mode = forceMode || document.getElementById('view-mode-sel').value;
 
   // Mirror is a Difference-only view (it juxtaposes Sample A and Sample B
   // directly rather than plotting a single grid) — a lone Sample A/B panel
-  // has nothing to mirror against, so it falls back to Heatmap.
+  // has nothing to mirror against, so it falls back to Heatmap. (forceMode
+  // sidesteps this — Mirror's own 3D Signed-Diff style calls back into this
+  // function with forceMode:'surface' to reuse the surface-drawing code
+  // below directly, rather than bouncing back into _renderMirror.)
   if (mode === 'mirror') {
     if (isDiff) { _renderMirror(divId, title); return; }
     mode = 'heatmap';
@@ -278,8 +286,9 @@ function _renderGrid(divId, cache, title, isDiff) {
 //       time is collapsed to a mean-dB-per-bin spectrum for each sample.
 //   'time' — shared time axis (Y), each side a full heatmap with frequency
 //       (X) increasing outward from the centre line.
-let _mirrorAxis = 'freq';           // 'freq' | 'time'
-let _mirrorStyle = 'independent';   // 'independent' | 'diff' — freq-axis sub-mode only
+let _mirrorAxis = 'freq';           // 'freq' | 'time' — ignored when _mirror3D is on
+let _mirrorStyle = 'independent';   // 'independent' | 'diff'
+let _mirror3D = false;              // flat 2D pyramid/mirrored-heatmap vs literal 3D surfaces
 const MIRROR_COLOR_A = '#b2182b';   // matches the A-louder/B-louder legend swatches
 const MIRROR_COLOR_B = '#2166ac';
 
@@ -384,10 +393,52 @@ function _renderMirrorByTime(divId, title, aCache, bCache) {
   }), _pcfg);
 }
 
+// 3D style, Independent: Sample A and Sample B each as their own full,
+// time-resolved 3D surface (X=time, Y=freq, Z=dB), overlaid semi-transparent
+// in one scene — unlike the flat pyramid, nothing is collapsed to a mean, so
+// this is literally each sample's whole spectrogram as terrain you can
+// rotate to see where one pokes above the other. Solid (non-diverging)
+// per-surface colours matching the A-red/B-blue legend, since here colour
+// just distinguishes the two surfaces rather than encoding a difference.
+function _renderMirror3DIndependent(divId, title, aCache, bCache) {
+  const hover = label => `${label}<br>Time: %{x:.3f} s<br>Freq: %{y:.0f} Hz<br>Level: %{z:.1f} dB<extra></extra>`;
+  Plotly.react(divId, [
+    { x: aCache.times, y: aCache.freqs, z: aCache.zDb, type: 'surface', showscale: false, opacity: 0.75,
+      colorscale: [[0, MIRROR_COLOR_A], [1, MIRROR_COLOR_A]], hovertemplate: hover('Sample A'), name: 'Sample A' },
+    { x: bCache.times, y: bCache.freqs, z: bCache.zDb, type: 'surface', showscale: false, opacity: 0.75,
+      colorscale: [[0, MIRROR_COLOR_B], [1, MIRROR_COLOR_B]], hovertemplate: hover('Sample B'), name: 'Sample B' },
+  ], {
+    title: { text: title, font: { size: 11 }, pad: { t: 2, b: 0 } },
+    font: { size: 10, family: 'inherit' },
+    paper_bgcolor: '#fff',
+    scene: {
+      xaxis: { title: 'Time (s)' },
+      yaxis: { title: 'Frequency (Hz)', type: _logFreq ? 'log' : 'linear' },
+      zaxis: { title: 'dB' },
+    },
+    margin: { l: 0, r: 0, t: 28, b: 0 },
+  }, _pcfg);
+}
+
 function _renderMirror(divId, title) {
   const a = slots.a, b = slots.b;
   if (!a.lCache || !b.lCache) {
     Plotly.react(divId, [], _wl(title, '', '', {}), _pcfg);
+    return;
+  }
+  if (_mirror3D) {
+    if (_mirrorStyle === 'diff') {
+      // A literal 3D mountains/valleys surface of the true A−B difference
+      // needs the full, un-collapsed (time, freq) diff grid — the same data
+      // the numeric Difference view's own 3D Surface uses — so this reuses
+      // _renderGrid's surface-drawing code directly (forceMode:'surface'
+      // sidesteps its usual "Plot type is mirror" redirect) rather than
+      // duplicating cmin/cmax/reversescale/hover logic here.
+      if (!_diffCache) { _requestDiff(); return; }
+      _renderGrid(divId, _diffCache, title + ' (Δ = A − B)', true, 'surface');
+    } else {
+      _renderMirror3DIndependent(divId, title, a.lCache, b.lCache);
+    }
     return;
   }
   if (_mirrorAxis === 'freq') _renderMirrorByFreq(divId, title, a.lCache, b.lCache);
@@ -410,43 +461,67 @@ window.specToggleMirrorStyle = function() {
   if (_mode === 'diff') _renderMirror('diff-plot', 'Difference: Sample A − Sample B');
 };
 
-// The mirror-axis toggle only makes sense in Difference mode with Mirror
-// selected — hidden otherwise so it doesn't sit around doing nothing.
+window.specToggleMirror3D = function() {
+  _mirror3D = !_mirror3D;
+  document.getElementById('mirror-3d-btn').textContent = _mirror3D ? 'Mirror: 3D Surface' : 'Mirror: Flat';
+  _updateDiffLegend();
+  _updateMirrorAxisBtn();
+  _updateMirrorStyleBtn();
+  if (_mode === 'diff') _renderMirror('diff-plot', 'Difference: Sample A − Sample B');
+};
+
+// The mirror-axis toggle only makes sense in flat Mirror mode — 3D doesn't
+// need it (overlapping surfaces + rotation separate A and B without having
+// to pick which axis to mirror on).
 function _updateMirrorAxisBtn() {
   const btn = document.getElementById('mirror-axis-btn');
+  const show = _mode === 'diff' && document.getElementById('view-mode-sel').value === 'mirror' && !_mirror3D;
+  btn.style.display = show ? '' : 'none';
+}
+
+// The 3D-surface toggle applies to Mirror mode regardless of axis sub-mode.
+function _updateMirror3DBtn() {
+  const btn = document.getElementById('mirror-3d-btn');
   const show = _mode === 'diff' && document.getElementById('view-mode-sel').value === 'mirror';
   btn.style.display = show ? '' : 'none';
 }
 
-// The Independent/Signed-Diff style toggle only exists for Mirror-by-
-// frequency — Mirror-by-time doesn't have this distinction implemented.
+// The Independent/Signed-Diff style toggle exists for Mirror-by-frequency
+// (flat) and for either axis once 3D is on — 3D always draws it (twin
+// surfaces vs one true-diff surface), so the axis choice stops mattering.
+// Flat Mirror-by-time still has no such distinction implemented.
 function _updateMirrorStyleBtn() {
   const btn = document.getElementById('mirror-style-btn');
   const show = _mode === 'diff' && document.getElementById('view-mode-sel').value === 'mirror'
-    && _mirrorAxis === 'freq';
+    && (_mirror3D || _mirrorAxis === 'freq');
   btn.style.display = show ? '' : 'none';
 }
 
 // The A-red/B-blue legend applies to Heatmap/3D Surface (colour encodes the
-// sign of A−B) and Mirror-by-frequency (A's fill/line is literally drawn in
-// the same red, B's in the same blue). It's hidden for Waterfall (colour
-// means time there) and Mirror-by-time (heatmaps use the selected sequential
-// colorscale, not red/blue).
+// sign of A−B), Mirror-by-frequency (A's fill/line is literally drawn in the
+// same red, B's in the same blue), and Mirror's 3D style (same convention,
+// either as two solid-coloured surfaces or one reversed-RdBu diff surface).
+// It's hidden for Waterfall (colour means time there) and flat Mirror-by-
+// time (heatmaps use the selected sequential colorscale, not red/blue).
 function _updateDiffLegend() {
   const legend = document.getElementById('diff-legend');
   const mode = document.getElementById('view-mode-sel').value;
-  const hide = mode === 'waterfall' || (mode === 'mirror' && _mirrorAxis === 'time');
+  const hide = mode === 'waterfall' || (mode === 'mirror' && _mirrorAxis === 'time' && !_mirror3D);
   legend.style.display = hide ? 'none' : '';
 }
 
 window.specViewModeChanged = function() {
   _updateDiffLegend();
   _updateMirrorAxisBtn();
+  _updateMirror3DBtn();
   _updateMirrorStyleBtn();
-  // Mirror doesn't need the interpolated diff grid — it renders straight
-  // from Sample A/B's own already-computed spectrograms — so only fetch a
-  // fresh diff when switching to a non-Mirror view that doesn't have one yet.
-  if (_mode === 'diff' && document.getElementById('view-mode-sel').value !== 'mirror' && !_diffCache) {
+  const mode = document.getElementById('view-mode-sel').value;
+  // Flat Mirror renders straight from Sample A/B's own already-computed
+  // spectrograms, no interpolated diff grid needed — but Mirror's 3D
+  // Signed-Diff style does need it (see _renderMirror), same as every
+  // non-Mirror view, so only skip the fetch for flat/Independent Mirror.
+  const needsDiffCache = !(mode === 'mirror' && !(_mirror3D && _mirrorStyle === 'diff'));
+  if (_mode === 'diff' && needsDiffCache && !_diffCache) {
     _requestDiff();
     return;
   }
@@ -488,9 +563,12 @@ function specSettingsChanged() {
   const semitones = +document.getElementById('semitone-sel').value;
   if (!window.pySpecRecompute) return;
   window.pySpecRecompute(nFft, hop, fMax, semitones);
+  // A settings change invalidates any cached numeric diff grid — flat Mirror
+  // doesn't need it (it reads Sample A/B's own spectrograms directly, which
+  // pySpecRecompute above just refreshed), but Mirror's 3D Signed-Diff style
+  // does, so null it unconditionally and let _renderMirror re-fetch lazily.
+  _diffCache = null;
   if (_mode === 'diff') {
-    // Mirror doesn't use the interpolated diff grid — it reads Sample A/B's
-    // own spectrograms directly, which pySpecRecompute above just refreshed.
     if (document.getElementById('view-mode-sel').value === 'mirror') {
       _renderMirror('diff-plot', 'Difference: Sample A − Sample B');
     } else {
@@ -570,6 +648,7 @@ window.specSetMode = function(mode) {
   document.getElementById('single-slot-group').style.display = mode === 'single' ? '' : 'none';
   _applySingleClass();
   _updateMirrorAxisBtn();
+  _updateMirror3DBtn();
   _updateMirrorStyleBtn();
   // Leaving Live mode releases the mic promptly rather than leaving it hot
   // in the background — same reasoning as the beforeunload safety net below.
