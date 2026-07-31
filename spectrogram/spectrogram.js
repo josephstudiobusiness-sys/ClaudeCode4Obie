@@ -264,7 +264,8 @@ function _renderGrid(divId, cache, title, isDiff) {
 //       time is collapsed to a mean-dB-per-bin spectrum for each sample.
 //   'time' — shared time axis (Y), each side a full heatmap with frequency
 //       (X) increasing outward from the centre line.
-let _mirrorAxis = 'freq';   // 'freq' | 'time'
+let _mirrorAxis = 'freq';           // 'freq' | 'time'
+let _mirrorStyle = 'independent';   // 'independent' | 'diff' — freq-axis sub-mode only
 const MIRROR_COLOR_A = '#b2182b';   // matches the A-louder/B-louder legend swatches
 const MIRROR_COLOR_B = '#2166ac';
 
@@ -275,16 +276,58 @@ function _avgSpectrum(cache) {
   return cache.zDb.map(row => row.reduce((s, v) => s + v, 0) / (row.length || 1));
 }
 
+// Linear interpolation, boundary-clamped — same convention as main.py's
+// np.interp (used for the numeric Difference view's frequency alignment).
+function _interp1(x, xp, fp) {
+  const n = xp.length;
+  if (x <= xp[0]) return fp[0];
+  if (x >= xp[n - 1]) return fp[n - 1];
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (xp[m] <= x) lo = m; else hi = m; }
+  const t = (x - xp[lo]) / (xp[hi] - xp[lo]);
+  return fp[lo] + t * (fp[hi] - fp[lo]);
+}
+
 function _renderMirrorByFreq(divId, title, aCache, bCache) {
   const freqsA = aCache.freqs, freqsB = bCache.freqs;
   const avgA = _avgSpectrum(aCache), avgB = _avgSpectrum(bCache);
+  const fMin = Math.min(freqsA[0], freqsB[0]), fMax = Math.max(freqsA.at(-1), freqsB.at(-1));
+
+  if (_mirrorStyle === 'diff') {
+    // True subtraction: avg(A) − avg(B), with B's average resampled onto
+    // A's frequency bins first (1-D, same idea as main.py's _compute_diff,
+    // just frequency-only since time is already collapsed to a mean here).
+    // Positive (A louder) → x negative → extends left, red. Negative (B
+    // louder) → x positive → extends right, blue. Split into two traces so
+    // each half gets its own fill colour — Plotly can't colour one fill by
+    // sign, so wherever a trace's sign doesn't apply its value is zeroed.
+    const diff = freqsA.map((f, i) => avgA[i] - _interp1(f, freqsB, avgB));
+    const xLeft  = diff.map(d => d > 0 ? -d : 0);
+    const xRight = diff.map(d => d < 0 ? -d : 0);
+    Plotly.react(divId, [
+      { x: xLeft, y: freqsA, customdata: diff, type: 'scatter', mode: 'lines', fill: 'tozerox',
+        fillcolor: MIRROR_COLOR_A + '55', line: { color: MIRROR_COLOR_A, width: 1 },
+        name: 'A louder', hovertemplate: 'Freq: %{y:.0f} Hz<br>ΔdB: %{customdata:.1f}<extra></extra>' },
+      { x: xRight, y: freqsA, customdata: diff, type: 'scatter', mode: 'lines', fill: 'tozerox',
+        fillcolor: MIRROR_COLOR_B + '55', line: { color: MIRROR_COLOR_B, width: 1 },
+        name: 'B louder', hovertemplate: 'Freq: %{y:.0f} Hz<br>ΔdB: %{customdata:.1f}<extra></extra>' },
+    ], _wl(title + ' (Δ = A − B)', '← A louder · B louder →', 'Frequency (Hz)', {
+      margin: { l: 55, r: 20, t: 26, b: 34 },
+      xaxis: { showticklabels: false, zeroline: true, zerolinewidth: 1, zerolinecolor: cssVar('--border') },
+      yaxis: { type: _logFreq ? 'log' : 'linear', range: _logFreq ? undefined : [fMin, fMax] },
+      showlegend: false,
+    }), _pcfg);
+    return;
+  }
+
+  // Independent (default): each sample's own average, not a subtraction —
+  // see the module comment above for why.
   // reduce(), not Math.min(...arr) — spreading a large array into a function
   // call can overflow the JS argument stack.
   const floor = Math.min(avgA.reduce((m, v) => Math.min(m, v), Infinity),
                           avgB.reduce((m, v) => Math.min(m, v), Infinity));
   const extentA = avgA.map(v => -(v - floor));   // negative → extends left
   const extentB = avgB.map(v => v - floor);      // positive → extends right
-  const fMin = Math.min(freqsA[0], freqsB[0]), fMax = Math.max(freqsA.at(-1), freqsB.at(-1));
 
   Plotly.react(divId, [
     { x: extentA, y: freqsA, customdata: avgA, type: 'scatter', mode: 'lines', fill: 'tozerox',
@@ -338,6 +381,14 @@ window.specToggleMirrorAxis = function() {
   document.getElementById('mirror-axis-btn').textContent =
     _mirrorAxis === 'freq' ? 'Mirror: Frequency' : 'Mirror: Time';
   _updateDiffLegend();
+  _updateMirrorStyleBtn();
+  if (_mode === 'diff') _renderMirror('diff-plot', 'Difference: Sample A − Sample B');
+};
+
+window.specToggleMirrorStyle = function() {
+  _mirrorStyle = _mirrorStyle === 'independent' ? 'diff' : 'independent';
+  document.getElementById('mirror-style-btn').textContent =
+    _mirrorStyle === 'diff' ? 'Mirror: Signed Diff' : 'Mirror: Independent';
   if (_mode === 'diff') _renderMirror('diff-plot', 'Difference: Sample A − Sample B');
 };
 
@@ -346,6 +397,15 @@ window.specToggleMirrorAxis = function() {
 function _updateMirrorAxisBtn() {
   const btn = document.getElementById('mirror-axis-btn');
   const show = _mode === 'diff' && document.getElementById('view-mode-sel').value === 'mirror';
+  btn.style.display = show ? '' : 'none';
+}
+
+// The Independent/Signed-Diff style toggle only exists for Mirror-by-
+// frequency — Mirror-by-time doesn't have this distinction implemented.
+function _updateMirrorStyleBtn() {
+  const btn = document.getElementById('mirror-style-btn');
+  const show = _mode === 'diff' && document.getElementById('view-mode-sel').value === 'mirror'
+    && _mirrorAxis === 'freq';
   btn.style.display = show ? '' : 'none';
 }
 
@@ -364,6 +424,7 @@ function _updateDiffLegend() {
 window.specViewModeChanged = function() {
   _updateDiffLegend();
   _updateMirrorAxisBtn();
+  _updateMirrorStyleBtn();
   // Mirror doesn't need the interpolated diff grid — it renders straight
   // from Sample A/B's own already-computed spectrograms — so only fetch a
   // fresh diff when switching to a non-Mirror view that doesn't have one yet.
@@ -488,6 +549,7 @@ window.specSetMode = function(mode) {
   document.getElementById('single-slot-group').style.display = mode === 'single' ? '' : 'none';
   _applySingleClass();
   _updateMirrorAxisBtn();
+  _updateMirrorStyleBtn();
   if (mode === 'diff') {
     _updateDiffLegend();
     if (document.getElementById('view-mode-sel').value === 'mirror') {

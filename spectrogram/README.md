@@ -71,13 +71,25 @@ Sample A, Sample B, or the Difference view:
   difference. A **Mirror: Frequency / Time** toolbar button (visible only in
   this mode) toggles which axis is shared:
   - **Frequency** (default) — a population-pyramid-style plot: Y=frequency
-    (shared), and for each bin a filled line extends left for Sample A's
-    time-averaged level, right for Sample B's (red/blue, matching the
-    Difference legend). Time is collapsed to a mean.
+    (shared), and for each bin a filled line extends left for Sample A,
+    right for Sample B (red/blue, matching the Difference legend). Time is
+    collapsed to a mean. A second toolbar button, **Mirror: Independent /
+    Signed Diff** (visible only in this Frequency sub-mode), picks what's
+    actually plotted:
+    - **Independent** (default) — each sample's own time-averaged level,
+      unrelated curves — good for comparing overall shape/timbre.
+    - **Signed Diff** — a true `A − B` subtraction (B's average linearly
+      interpolated onto A's frequency bins first, matching the numeric
+      Difference view's approach), split left/right by sign so it still
+      reads red=A-louder/blue=B-louder, but now the two sides are a single
+      mirrored quantity rather than independent curves.
   - **Time** — Y=time (shared), and each side is a full heatmap with
     frequency (X) increasing outward from the centre line — Sample A
     mirrored on the left, Sample B normal on the right. (Linear frequency
-    axis only here — log is undefined for the negative/mirrored side.)
+    axis only here — log is undefined for the negative/mirrored side. No
+    Independent/Signed-Diff toggle here — a per-(time,freq) mirrored
+    heatmap doesn't have the same single-value-per-point ambiguity the
+    frequency-axis pyramid does.)
 
 ### Difference mode
 
