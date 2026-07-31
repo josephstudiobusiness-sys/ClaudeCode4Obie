@@ -543,7 +543,7 @@ function _renderMirror(divId, title) {
       // _renderGrid's surface-drawing code directly (forceMode:'surface'
       // sidesteps its usual "Plot type is mirror" redirect) rather than
       // duplicating cmin/cmax/reversescale/hover logic here.
-      if (!_diffCache) { _maybeRequestDiff(); return; }
+      if (!_diffCache) { _fetchDiffGrid(); return; }
       _renderGrid(divId, _diffCache, title + ' (Δ = ① − ②)', true, 'surface');
     } else {
       _renderMirror3DIndependent(divId, title, a.lCache, b.lCache);
@@ -772,6 +772,27 @@ window.specSetMode = function(mode) {
   }
 };
 
+// Actually kicks off the Python numeric-diff computation — the one thing
+// that populates _diffCache. Called both by _maybeRequestDiff (non-Mirror
+// views) and directly by _renderMirror's 3D Signed-Diff branch. Mirror must
+// call this directly rather than going through _maybeRequestDiff: that
+// function re-dispatches to _renderMirror whenever the view is Mirror, and
+// _renderMirror's 3D-diff branch used to call _maybeRequestDiff right back
+// when the cache was empty — an infinite synchronous loop that overflowed
+// the call stack and silently aborted mid-render, leaving the plot stuck on
+// stale data (the "some files stop updating" bug).
+function _fetchDiffGrid() {
+  if (!window.pySpecComputeDiff) return;
+  const nFft = +document.getElementById('n-fft-sel').value;
+  const hop  = +document.getElementById('hop-sel').value;
+  const fMax = +document.getElementById('fmax-inp').value;
+  const semitones = +document.getElementById('semitone-sel').value;
+  const el = document.getElementById('diff-status');
+  el.textContent = 'computing…';
+  el.className = 'sp-panel-status';
+  window.pySpecComputeDiff(_diffId1, _diffId2, nFft, hop, fMax, semitones);
+}
+
 function _maybeRequestDiff() {
   _updateDiffTitle();
   const a = _getFile(_diffId1), b = _getFile(_diffId2);
@@ -788,14 +809,7 @@ function _maybeRequestDiff() {
     _renderMirror('diff-plot', _diffTitle());
     return;
   }
-  if (!window.pySpecComputeDiff) return;
-  const nFft = +document.getElementById('n-fft-sel').value;
-  const hop  = +document.getElementById('hop-sel').value;
-  const fMax = +document.getElementById('fmax-inp').value;
-  const semitones = +document.getElementById('semitone-sel').value;
-  el.textContent = 'computing…';
-  el.className = 'sp-panel-status';
-  window.pySpecComputeDiff(_diffId1, _diffId2, nFft, hop, fMax, semitones);
+  _fetchDiffGrid();
 }
 
 window.onSpecDiffResult = function(times_js, freqs_js, flatZ_js, nFreqs, nTimes) {
