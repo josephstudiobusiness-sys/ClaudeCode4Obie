@@ -85,7 +85,11 @@ drawn — every panel (Single/Compare) and the Difference view:
   spectrogram layout (time scrolling left→right, frequency bottom→top).
 - **3D Surface** — X=time, Y=frequency, Z=dB as actual height, matching how
   an FRF plot puts dB on a real axis rather than encoding it as colour.
-  Rotatable/zoomable.
+  Rotatable/zoomable (drag to orbit freely), and a **View: Default /
+  Rotated 90°** toolbar button (visible whenever a 3D surface is on screen,
+  including Mirror's 3D style) snaps to a second preset angle — a quick
+  reference view rather than a data change, since dragging already lets you
+  look at it from anywhere.
 - **Waterfall** — the classic acoustics cascade plot: one FRF-style line
   (X=frequency, Y=dB) per time slice, stacked with a vertical offset so
   later slices sit above earlier ones (decimated to ~30 slices for
