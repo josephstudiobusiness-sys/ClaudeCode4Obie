@@ -48,6 +48,7 @@
       <button id="mode-single-btn" class="tb-btn active" onclick="specSetMode('single')" title="Show just one sample, full width">🔎 Single</button>
       <button id="mode-compare-btn" class="tb-btn" onclick="specSetMode('compare')" title="Show Sample A and Sample B side by side">🆚 Compare</button>
       <button id="mode-diff-btn" class="tb-btn" onclick="specSetMode('diff')" title="Show the intensity difference A − B as one plot">⛰ Difference</button>
+      <button id="mode-live-btn" class="tb-btn" onclick="specSetMode('live')" title="Watch a live spectrogram of the microphone, without saving it to Sample A or B — handy for dialing in settings">🎙 Live</button>
     </div>
     <div class="tb-group" id="single-slot-group">
       <button id="single-a-btn" class="tb-btn active" onclick="specSetSingleSlot('a')">Sample A</button>
@@ -140,7 +141,8 @@
       <div class="sp-content">
         <p class="sp-hint" style="margin:0 0 6px">Load a file (WAV, MP3, or FRF: TRF/TRV/AvC/AvR/CSV/MAT) or record from the mic into <strong>Sample A</strong> and <strong>Sample B</strong> below — only one mic recording can run at a time.</p>
         <p class="sp-hint" style="margin:0 0 6px">Switch to <strong>🔎 Single</strong> to view just one sample, full width.</p>
-        <p class="sp-hint" style="margin:0">Switch to <strong>⛰ Difference</strong> to see Sample A's intensity minus Sample B's, as one plot — 3D Surface makes the peaks and dips easiest to read. <strong>Mirror</strong> instead shows A and B side by side around a center line, without subtracting them.</p>
+        <p class="sp-hint" style="margin:0 0 6px">Switch to <strong>⛰ Difference</strong> to see Sample A's intensity minus Sample B's, as one plot — 3D Surface makes the peaks and dips easiest to read. <strong>Mirror</strong> instead shows A and B side by side around a center line, without subtracting them.</p>
+        <p class="sp-hint" style="margin:0">Switch to <strong>🎙 Live</strong> to watch the microphone continuously while you dial in FFT settings — nothing is saved to Sample A or B.</p>
       </div>
     </div><!-- sp-sidebar -->
 
@@ -217,6 +219,20 @@
       <div class="sp-plot-row" style="flex:1">
         <div id="diff-plot" class="plot-div"></div>
       </div>
+    </div>
+
+    <!-- Full-width live-mic view — hidden until "🎙 Live" mode is selected -->
+    <div class="sp-diffview" id="live-view" style="display:none">
+      <div class="sp-panel-toolbar">
+        <span class="sp-panel-title">Live Spectrogram</span>
+        <button id="live-btn" class="tb-btn" onclick="specToggleLive()" title="Start/stop watching the microphone">🎙 Start Live</button>
+        <div class="tb-flex"></div>
+        <span class="sp-panel-status" id="live-status">not listening</span>
+      </div>
+      <div class="sp-plot-row" style="flex:1">
+        <div id="live-plot" class="plot-div"></div>
+      </div>
+      <div class="sp-panel-frameinfo" id="frame-info-live">–</div>
     </div>
 
   </div><!-- sp-body -->

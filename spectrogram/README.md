@@ -29,13 +29,14 @@ in one of two ways:
   record at a time (one physical microphone) — the other side's Record
   button is disabled meanwhile.
 
-Three view modes, via the toolbar:
+Four view modes, via the toolbar:
 
 - **🔎 Single** (default) — just one sample, full width (a "Sample A / Sample
   B" toggle picks which). Reuses the same panels as Compare — no separate
   plots to keep in sync, it's a pure layout toggle.
 - **🆚 Compare** — Sample A and Sample B side by side.
 - **⛰ Difference** — see below.
+- **🎙 Live** — see "Live view" below.
 
 FFT window size, hop size, max frequency, **frequency smoothing**, colorscale,
 and the frequency-axis scale are all adjustable in the sidebar and apply to
@@ -57,14 +58,17 @@ subtracting, so the diff doesn't inherit narrow-band noise from either side).
 A **Plot type** selector (sidebar) switches how any spectrogram is drawn —
 Sample A, Sample B, or the Difference view:
 
-- **Heatmap** (default) — X=frequency, Y=time, colour=dB.
-- **3D Surface** — X=frequency, Y=time, Z=dB as actual height, matching how
+- **Heatmap** (default) — X=time, Y=frequency, colour=dB — the usual
+  spectrogram layout (time scrolling left→right, frequency bottom→top).
+- **3D Surface** — X=time, Y=frequency, Z=dB as actual height, matching how
   an FRF plot puts dB on a real axis rather than encoding it as colour.
   Rotatable/zoomable.
 - **Waterfall** — the classic acoustics cascade plot: one FRF-style line
   (X=frequency, Y=dB) per time slice, stacked with a vertical offset so
   later slices sit above earlier ones (decimated to ~30 slices for
-  readability), colour-graded early→late.
+  readability), colour-graded early→late. Frequency stays on X here — a
+  waterfall isn't a time/frequency grid, each line *is* one time slice, so
+  there's no "which axis is time" to flip.
 - **Mirror (A | B)** — *Difference view only.* Rather than subtracting A
   from B, this shows both samples' own spectrograms side by side around a
   centre line, so you compare shapes directly instead of reading a computed
@@ -83,13 +87,13 @@ Sample A, Sample B, or the Difference view:
       Difference view's approach), split left/right by sign so it still
       reads red=A-louder/blue=B-louder, but now the two sides are a single
       mirrored quantity rather than independent curves.
-  - **Time** — Y=time (shared), and each side is a full heatmap with
-    frequency (X) increasing outward from the centre line — Sample A
-    mirrored on the left, Sample B normal on the right. (Linear frequency
-    axis only here — log is undefined for the negative/mirrored side. No
-    Independent/Signed-Diff toggle here — a per-(time,freq) mirrored
-    heatmap doesn't have the same single-value-per-point ambiguity the
-    frequency-axis pyramid does.)
+  - **Time** — X=time (shared), and each side is a full heatmap with
+    frequency (Y) increasing outward from the centre line — Sample A
+    mirrored below, Sample B normal above. (Linear frequency axis only here
+    — log is undefined for the negative/mirrored side. No Independent/
+    Signed-Diff toggle here — a per-(time,freq) mirrored heatmap doesn't
+    have the same single-value-per-point ambiguity the frequency-axis
+    pyramid does.)
 
 ### Difference mode
 
@@ -105,6 +109,20 @@ the most literal read on the "mountains and valleys." If A and B differ in
 sample rate or length, B is resampled onto A's frequency/time grid first
 (Heatmap/Surface/Waterfall only — Mirror doesn't need this, since it never
 subtracts the two).
+
+### Live view
+
+Toggle **🎙 Live** (top toolbar) for a full-width, continuously-updating
+spectrogram of the microphone — useful for dialing in FFT window/hop/max-
+freq/smoothing/colorscale by ear-and-eye without committing anything to
+Sample A or B. Click **Start Live** to begin; it uses the exact same rolling
+5 s ring buffer and throttled `compute_spectrogram()` recompute that
+recording's live preview already uses (just keyed by a `'live'` pseudo-slot
+instead of `'a'`/`'b'`), so sidebar setting changes take effect within a
+push or two, same as during a recording. There's only one physical
+microphone, so Live and per-slot Recording are mutually exclusive — each
+disables the other's controls while active — and leaving Live mode (or
+closing the tab) stops it and releases the mic automatically.
 
 All signal processing is delegated to the canonical ObieApp Python modules,
 loaded live from GitHub at runtime — none of it is reimplemented here (see
@@ -128,9 +146,13 @@ comes from ObieApp's Python modules" — for good reason in each case:
   reimplementation of an MP3 decoder.
 
 The mic capture path (`AudioWorkletNode` → batched samples → a Python rolling
-buffer for the live preview, plus the full clip kept client-side for the
-final static spectrogram on Stop) mirrors the capture pattern already used by
+buffer, recomputed on each push) mirrors the capture pattern already used by
 [Acquire](https://github.com/chrisbuerginrogers/ObieApp/blob/main/Web/tools/acquire/acquire.js).
+Per-slot Recording and the standalone Live view share this one low-level
+engine (only one consumer can hold the mic at a time) but differ in what
+they do with it: Recording also keeps the full clip client-side so Stop can
+finalise it into that slot's static sample, while Live view is read-only —
+nothing is kept beyond the rolling window, so it can run indefinitely.
 
 ## Deploying
 

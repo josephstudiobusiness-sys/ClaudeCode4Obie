@@ -36,9 +36,10 @@ const _wl = (title, xl, yl, extra) => ({
 
 ['a', 'b'].forEach(slot => {
   Plotly.newPlot(`waveform-plot-${slot}`, [], _wl('Waveform', 'Time (s)', 'Amplitude'), _pcfg);
-  Plotly.newPlot(`spec-plot-${slot}`,     [], _wl('Spectrogram', 'Frequency (Hz)', 'Time (s)'), _pcfg);
+  Plotly.newPlot(`spec-plot-${slot}`,     [], _wl('Spectrogram', 'Time (s)', 'Frequency (Hz)'), _pcfg);
 });
-Plotly.newPlot('diff-plot', [], _wl('Difference: Sample A − Sample B', 'Frequency (Hz)', 'Time (s)'), _pcfg);
+Plotly.newPlot('diff-plot', [], _wl('Difference: Sample A − Sample B', 'Time (s)', 'Frequency (Hz)'), _pcfg);
+Plotly.newPlot('live-plot', [], _wl('Live Spectrogram', 'Time (s)', 'Frequency (Hz)'), _pcfg);
 
 // ── File loading (WAV, MP3, or FRF files IFFT'd to an impulse response) ──
 // WAV bytes go straight to Python (scipy reads the format directly). MP3 —
@@ -117,6 +118,12 @@ window.onSpecSampleError = function(slot, msg) {
 };
 
 window.onSpecError = function(slot, msg) {
+  if (slot === 'live') {
+    const el = document.getElementById('live-status');
+    el.textContent = 'error: ' + msg;
+    el.className = 'sp-panel-status err';
+    return;
+  }
   setSt(slot, 'error: ' + msg, 'err');
 };
 
@@ -131,14 +138,21 @@ function _unpackSpec(times_js, freqs_js, flatZ_js, nFreqs, nTimes) {
 }
 
 window.onSpecSpectrogramResult = function(slot, channel, times_js, freqs_js, flatZ_js, nFreqs, nTimes) {
-  const s = slots[slot];
   const cache = _unpackSpec(times_js, freqs_js, flatZ_js, nFreqs, nTimes);
+  if (slot === 'live') {
+    _renderGrid('live-plot', cache, 'Live Spectrogram', false);
+    renderFrameInfo('live', cache.times, cache.freqs);
+    return;
+  }
+  const s = slots[slot];
   if (channel === 'r') s.rCache = cache; else s.lCache = cache;
   if (s.showChannel === channel) renderSpec(slot);
 };
 
-// zDb from _unpackSpec is (nFreqBins rows × nTimeFrames cols) — transpose so
-// frequency runs along x (horizontal spread) and time runs along y (height).
+// zDb from _unpackSpec is (nFreqBins rows × nTimeFrames cols) — already the
+// right shape for Plotly's heatmap/surface z (rows=y=freq, cols=x=time), so
+// Heatmap/Surface use it directly. Waterfall needs the opposite (one row per
+// time frame, to pull out a freq/dB curve per slice), so it still transposes.
 function _transpose(z) {
   const nRows = z.length, nCols = z[0].length;
   const t = new Array(nCols);
@@ -210,33 +224,33 @@ function _renderGrid(divId, cache, title, isDiff) {
     mode = 'heatmap';
   }
 
-  const { times, freqs, zDb } = cache;
-  const zT = _transpose(zDb);   // (nTimes rows × nFreqs cols)
+  const { times, freqs, zDb } = cache;   // zDb: nFreqBins rows × nTimeFrames cols
   const colorscale = isDiff ? 'RdBu' : document.getElementById('colorscale-sel').value;
 
   const zLabel = isDiff ? 'ΔdB' : 'Level';
-  const hoverTemplate3D = `Freq: %{x:.0f} Hz<br>Time: %{y:.3f} s<br>${zLabel}: %{z:.1f} dB<extra></extra>`;
+  const hoverTemplate3D = `Time: %{x:.3f} s<br>Freq: %{y:.0f} Hz<br>${zLabel}: %{z:.1f} dB<extra></extra>`;
 
   if (mode === 'surface') {
-    const trace = { x: freqs, y: times, z: zT, type: 'surface', colorscale, showscale: true,
+    const trace = { x: times, y: freqs, z: zDb, type: 'surface', colorscale, showscale: true,
       colorbar: { title: isDiff ? 'ΔdB' : 'dB', titleside: 'right', thickness: 10, tickfont: { size: 9 } },
       hovertemplate: hoverTemplate3D };
     // Plotly's built-in 'RdBu' maps low→red, high→blue — the opposite of the
     // A-is-red/B-is-blue convention (see the legend in the diff toolbar), so
     // flip it: negative (B louder) → blue, positive (A louder) → red.
-    if (isDiff) { const m = _maxAbs(zT); trace.cmin = -m; trace.cmax = m; trace.reversescale = true; }
+    if (isDiff) { const m = _maxAbs(zDb); trace.cmin = -m; trace.cmax = m; trace.reversescale = true; }
     Plotly.react(divId, [trace], {
       title: { text: title, font: { size: 11 }, pad: { t: 2, b: 0 } },
       font: { size: 10, family: 'inherit' },
       paper_bgcolor: '#fff',
       scene: {
-        xaxis: { title: 'Frequency (Hz)', type: _logFreq ? 'log' : 'linear' },
-        yaxis: { title: 'Time (s)' },
+        xaxis: { title: 'Time (s)' },
+        yaxis: { title: 'Frequency (Hz)', type: _logFreq ? 'log' : 'linear' },
         zaxis: { title: isDiff ? 'ΔdB' : 'dB' },
       },
       margin: { l: 0, r: 0, t: 28, b: 0 },
     }, _pcfg);
   } else if (mode === 'waterfall') {
+    const zT = _transpose(zDb);   // (nTimes rows × nFreqs cols) — one row per time frame
     Plotly.react(divId, _waterfallTraces(freqs, times, zT, isDiff), _wl(title, 'Frequency (Hz)',
       isDiff ? 'ΔdB (offset per time slice)' : 'dB (offset per time slice)', {
         margin: { l: 50, r: 20, t: 26, b: 34 },
@@ -244,13 +258,13 @@ function _renderGrid(divId, cache, title, isDiff) {
         showlegend: false,
       }), _pcfg);
   } else {
-    const trace = { x: freqs, y: times, z: zT, type: 'heatmap', colorscale, showscale: true,
+    const trace = { x: times, y: freqs, z: zDb, type: 'heatmap', colorscale, showscale: true,
       colorbar: { title: isDiff ? 'ΔdB' : 'dB', titleside: 'right', thickness: 10, len: 0.95, tickfont: { size: 9 } },
       zsmooth: 'fast', hovertemplate: hoverTemplate3D };
-    if (isDiff) { const m = _maxAbs(zT); trace.zmin = -m; trace.zmax = m; trace.reversescale = true; }
-    Plotly.react(divId, [trace], _wl(title, 'Frequency (Hz)', 'Time (s)', {
+    if (isDiff) { const m = _maxAbs(zDb); trace.zmin = -m; trace.zmax = m; trace.reversescale = true; }
+    Plotly.react(divId, [trace], _wl(title, 'Time (s)', 'Frequency (Hz)', {
       margin: { l: 50, r: 45, t: 26, b: 34 },
-      xaxis: { type: _logFreq ? 'log' : 'linear' },
+      yaxis: { type: _logFreq ? 'log' : 'linear' },
     }), _pcfg);
   }
 }
@@ -345,24 +359,28 @@ function _renderMirrorByFreq(divId, title, aCache, bCache) {
 }
 
 function _renderMirrorByTime(divId, title, aCache, bCache) {
-  const zA = _transpose(aCache.zDb), zB = _transpose(bCache.zDb);
-  const custA = zA.map(() => aCache.freqs), custB = zB.map(() => bCache.freqs);
+  // zDb is already freq-major (one row per freq bin) — exactly the shape
+  // needed here, since frequency is now the mirrored/split axis (y) and
+  // time is shared (x). customdata carries each row's true (positive) freq,
+  // since Sample A's y values themselves are negated for the mirror.
+  const custA = aCache.freqs.map(f => aCache.times.map(() => f));
+  const custB = bCache.freqs.map(f => bCache.times.map(() => f));
   const colorscale = document.getElementById('colorscale-sel').value;
   const fMax = Math.max(aCache.freqs.at(-1), bCache.freqs.at(-1));
 
   Plotly.react(divId, [
-    { x: aCache.freqs.map(f => -f), y: aCache.times, z: zA, customdata: custA,
+    { x: aCache.times, y: aCache.freqs.map(f => -f), z: aCache.zDb, customdata: custA,
       type: 'heatmap', colorscale, showscale: false, zsmooth: 'fast',
-      hovertemplate: 'Sample A<br>Freq: %{customdata:.0f} Hz<br>Time: %{y:.3f} s<br>Level: %{z:.1f} dB<extra></extra>' },
-    { x: bCache.freqs, y: bCache.times, z: zB, customdata: custB,
+      hovertemplate: 'Sample A<br>Time: %{x:.3f} s<br>Freq: %{customdata:.0f} Hz<br>Level: %{z:.1f} dB<extra></extra>' },
+    { x: bCache.times, y: bCache.freqs, z: bCache.zDb, customdata: custB,
       type: 'heatmap', colorscale, showscale: true,
       colorbar: { title: 'dB', titleside: 'right', thickness: 10, len: 0.95, tickfont: { size: 9 } }, zsmooth: 'fast',
-      hovertemplate: 'Sample B<br>Freq: %{customdata:.0f} Hz<br>Time: %{y:.3f} s<br>Level: %{z:.1f} dB<extra></extra>' },
-  ], _wl(title, '← Sample A · Frequency (Hz) · Sample B →', 'Time (s)', {
-    margin: { l: 50, r: 45, t: 26, b: 34 },
-    // Log scale is undefined for negative X (Sample A's mirrored side), so
+      hovertemplate: 'Sample B<br>Time: %{x:.3f} s<br>Freq: %{customdata:.0f} Hz<br>Level: %{z:.1f} dB<extra></extra>' },
+  ], _wl(title, 'Time (s)', '↓ Sample A · Frequency (Hz) · Sample B ↑', {
+    margin: { l: 55, r: 45, t: 26, b: 34 },
+    // Log scale is undefined for negative Y (Sample A's mirrored side), so
     // this sub-view is linear-only regardless of the Freq: Lin/Log toggle.
-    xaxis: { range: [-fMax, fMax], zeroline: true, zerolinewidth: 1, zerolinecolor: cssVar('--border') },
+    yaxis: { range: [-fMax, fMax], zeroline: true, zerolinewidth: 1, zerolinecolor: cssVar('--border') },
   }), _pcfg);
 }
 
@@ -540,16 +558,22 @@ window.specSetSingleSlot = function(slot) {
 };
 
 window.specSetMode = function(mode) {
+  const prevMode = _mode;
   _mode = mode;
   document.getElementById('mode-compare-btn').classList.toggle('active', mode === 'compare');
   document.getElementById('mode-single-btn').classList.toggle('active', mode === 'single');
   document.getElementById('mode-diff-btn').classList.toggle('active', mode === 'diff');
-  document.getElementById('compare-view').style.display = mode === 'diff' ? 'none' : '';
+  document.getElementById('mode-live-btn').classList.toggle('active', mode === 'live');
+  document.getElementById('compare-view').style.display = (mode === 'diff' || mode === 'live') ? 'none' : '';
   document.getElementById('diff-view').style.display = mode === 'diff' ? '' : 'none';
+  document.getElementById('live-view').style.display = mode === 'live' ? '' : 'none';
   document.getElementById('single-slot-group').style.display = mode === 'single' ? '' : 'none';
   _applySingleClass();
   _updateMirrorAxisBtn();
   _updateMirrorStyleBtn();
+  // Leaving Live mode releases the mic promptly rather than leaving it hot
+  // in the background — same reasoning as the beforeunload safety net below.
+  if (prevMode === 'live' && mode !== 'live' && _liveActive) stopLiveView();
   if (mode === 'diff') {
     _updateDiffLegend();
     if (document.getElementById('view-mode-sel').value === 'mirror') {
@@ -560,6 +584,9 @@ window.specSetMode = function(mode) {
     // diff-view was just unhidden — its container had no measurable size
     // while display:none, so the plot just drawn needs an explicit resize.
     const el = document.getElementById('diff-plot');
+    if (el) setTimeout(() => Plotly.Plots.resize(el), 0);
+  } else if (mode === 'live') {
+    const el = document.getElementById('live-plot');
     if (el) setTimeout(() => Plotly.Plots.resize(el), 0);
   } else {
     ['waveform-plot-a', 'spec-plot-a', 'waveform-plot-b', 'spec-plot-b'].forEach(id => {
@@ -600,13 +627,12 @@ window.onSpecDiffError = function(msg) {
   el.className = 'sp-panel-status err';
 };
 
-// ── Live microphone recording ──────────────────────────────────────────
+// ── Live microphone — shared low-level engine ───────────────────────────
 // Mirrors Acquire's AudioWorkletNode capture pattern (Web/tools/acquire/acquire.js):
-// an inline worklet posts raw Float32 audio. Chunks are (a) batched and pushed to
-// Python (pySpecMicPush) for a live rolling-window preview, using the same canonical
-// compute_spectrogram() as everywhere else, and (b) kept in full so that on Stop the
-// complete clip becomes that slot's sample (pySpecFinalizeRecording), just like a
-// loaded file. Only one slot can record at a time — there's one physical microphone.
+// an inline worklet posts raw Float32 audio, batched here into fixed-size chunks.
+// Two consumers share this one engine — per-slot Recording (below) and the
+// standalone Live view (further below) — since there's only one physical
+// microphone; whichever starts first holds it until it stops.
 const MIC_WORKLET_SRC = `
 class SpecCaptureProcessor extends AudioWorkletProcessor {
   process(inputs) {
@@ -619,44 +645,77 @@ registerProcessor('spec-capture', SpecCaptureProcessor);
 `;
 const MIC_BATCH_SIZE = 4096;
 
-let _recordingSlot = null;
+let _micUser = null;   // 'a' | 'b' | 'live' | null — who currently holds the mic
 let _micStream = null, _micCtx = null, _micSource = null, _micWorklet = null;
-let _micBatch = null, _micBatchFill = 0;
-let _micFullChunks = [], _micFullLen = 0, _micSr = 48000;
+let _micBatch = null, _micBatchFill = 0, _micSr = 48000;
+let _micOnBatch = null;   // callback(Float32Array) — a full MIC_BATCH_SIZE batch
+
+// Acquires the mic and starts calling onBatch(Float32Array) once per full
+// batch. Resolves with the actual AudioContext sample rate. Throws if the
+// mic is already held by another consumer.
+async function _micAcquire(user, onBatch) {
+  if (_micUser) throw new Error('microphone already in use');
+  _micStream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+  });
+  _micCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const blobUrl = URL.createObjectURL(new Blob([MIC_WORKLET_SRC], { type: 'application/javascript' }));
+  await _micCtx.audioWorklet.addModule(blobUrl);
+  _micSource  = _micCtx.createMediaStreamSource(_micStream);
+  _micWorklet = new AudioWorkletNode(_micCtx, 'spec-capture', { numberOfInputs: 1, numberOfOutputs: 0 });
+  _micBatch = new Float32Array(MIC_BATCH_SIZE);
+  _micBatchFill = 0;
+  _micSr = _micCtx.sampleRate;
+  _micOnBatch = onBatch;
+  _micWorklet.port.onmessage = e => {
+    const chunk = e.data;
+    let off = 0;
+    while (off < chunk.length) {
+      const room = MIC_BATCH_SIZE - _micBatchFill;
+      const take = Math.min(room, chunk.length - off);
+      _micBatch.set(chunk.subarray(off, off + take), _micBatchFill);
+      _micBatchFill += take; off += take;
+      if (_micBatchFill >= MIC_BATCH_SIZE && _micOnBatch) {
+        _micOnBatch(_micBatch.slice());
+        _micBatchFill = 0;
+      }
+    }
+  };
+  _micSource.connect(_micWorklet);
+  _micUser = user;
+  return _micSr;
+}
+
+function _micRelease() {
+  // Detach the message handler first — disconnect() stops future audio flow
+  // but doesn't cancel messages already in flight from the worklet thread,
+  // so without this, one or two trailing batches can still arrive after
+  // _micOnBatch is nulled below and throw.
+  if (_micWorklet) { _micWorklet.port.onmessage = null; try { _micWorklet.disconnect(); } catch (_) {} _micWorklet = null; }
+  if (_micSource)  { try { _micSource.disconnect(); }  catch (_) {} _micSource  = null; }
+  if (_micStream)  { _micStream.getTracks().forEach(t => t.stop()); _micStream = null; }
+  if (_micCtx)     { _micCtx.close().catch(() => {}); _micCtx = null; }
+  _micOnBatch = null;
+  _micUser = null;
+}
+
+// ── Per-slot recording ───────────────────────────────────────────────────
+// Batches are (a) pushed to Python (pySpecMicPush) for a live rolling-window
+// preview, using the same canonical compute_spectrogram() as everywhere
+// else, and (b) kept in full so that on Stop the complete clip becomes that
+// slot's sample (pySpecFinalizeRecording), just like a loaded file.
+let _recordingSlot = null;
+let _micFullChunks = [], _micFullLen = 0;
 
 async function startRecording(slot) {
-  if (_recordingSlot) return;
+  if (_micUser) return;
   try {
-    _micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-    });
-    _micCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const blobUrl = URL.createObjectURL(new Blob([MIC_WORKLET_SRC], { type: 'application/javascript' }));
-    await _micCtx.audioWorklet.addModule(blobUrl);
-    _micSource  = _micCtx.createMediaStreamSource(_micStream);
-    _micWorklet = new AudioWorkletNode(_micCtx, 'spec-capture', { numberOfInputs: 1, numberOfOutputs: 0 });
-    _micBatch = new Float32Array(MIC_BATCH_SIZE);
-    _micBatchFill = 0;
     _micFullChunks = []; _micFullLen = 0;
-    _micSr = _micCtx.sampleRate;
-    _micWorklet.port.onmessage = e => {
-      const chunk = e.data;
-      _micFullChunks.push(chunk); _micFullLen += chunk.length;
-      let off = 0;
-      while (off < chunk.length) {
-        const room = MIC_BATCH_SIZE - _micBatchFill;
-        const take = Math.min(room, chunk.length - off);
-        _micBatch.set(chunk.subarray(off, off + take), _micBatchFill);
-        _micBatchFill += take; off += take;
-        if (_micBatchFill >= MIC_BATCH_SIZE) {
-          if (window.pySpecMicPush) window.pySpecMicPush(_micBatch.slice());
-          _micBatchFill = 0;
-        }
-      }
-    };
-    _micSource.connect(_micWorklet);
-
-    if (window.pySpecMicStart) window.pySpecMicStart(slot, _micSr);
+    const sr = await _micAcquire(slot, batch => {
+      _micFullChunks.push(batch); _micFullLen += batch.length;
+      if (window.pySpecMicPush) window.pySpecMicPush(batch);
+    });
+    if (window.pySpecMicStart) window.pySpecMicStart(slot, sr);
     _recordingSlot = slot;
     _enterRecordingUI(slot);
   } catch (e) {
@@ -668,10 +727,8 @@ async function startRecording(slot) {
 function stopRecording() {
   const slot = _recordingSlot;
   if (!slot) return;
-  if (_micSource)  { try { _micSource.disconnect(); }  catch (_) {} _micSource  = null; }
-  if (_micWorklet) { try { _micWorklet.disconnect(); } catch (_) {} _micWorklet = null; }
-  if (_micStream)  { _micStream.getTracks().forEach(t => t.stop()); _micStream = null; }
-  if (_micCtx)     { _micCtx.close().catch(() => {}); _micCtx = null; }
+  const sr = _micSr;
+  _micRelease();
   if (window.pySpecMicStop) window.pySpecMicStop();
 
   const full = new Float32Array(_micFullLen);
@@ -684,7 +741,7 @@ function stopRecording() {
 
   if (full.length > 0 && window.pySpecFinalizeRecording) {
     setSt(slot, 'processing recording…');
-    window.pySpecFinalizeRecording(slot, full, _micSr);
+    window.pySpecFinalizeRecording(slot, full, sr);
   } else {
     setSt(slot, 'no audio captured', 'err');
   }
@@ -692,7 +749,7 @@ function stopRecording() {
 
 window.specToggleRecord = function(slot) {
   if (_recordingSlot === slot) stopRecording();
-  else if (!_recordingSlot) startRecording(slot);
+  else if (!_micUser) startRecording(slot);
 };
 
 function _enterRecordingUI(slot) {
@@ -704,6 +761,8 @@ function _enterRecordingUI(slot) {
   document.getElementById(`mic-btn-${other}`).disabled = true;
   document.getElementById(`play-btn-${slot}`).disabled = true;
   document.getElementById(`chan-btn-${slot}`).style.display = 'none';
+  const liveBtn = document.getElementById('live-btn');
+  if (liveBtn) liveBtn.disabled = true;
   // Recordings are mono (channel 'l' only) — if this slot was showing a
   // stereo file's R channel, reset to 'l' or the live preview would never
   // render (onSpecSpectrogramResult only renders when channel === showChannel).
@@ -721,6 +780,67 @@ function _exitRecordingUI(slot) {
   btn.classList.remove('recording');
   document.getElementById(`file-btn-label-${slot}`).style.display = '';
   document.getElementById(`mic-btn-${other}`).disabled = false;
+  const liveBtn = document.getElementById('live-btn');
+  if (liveBtn) liveBtn.disabled = false;
+}
+
+// ── Standalone Live view ─────────────────────────────────────────────────
+// A dedicated "just watch the mic" mode for dialing in FFT window/hop/max-
+// freq/smoothing/colorscale quickly, without loading the result into Sample
+// A or B. Reuses the exact same rolling-window ring buffer and throttled
+// compute_spectrogram() in main.py that per-slot recording's live preview
+// already uses (pySpecMicStart/Push/Stop, keyed by a 'live' pseudo-slot) —
+// settings changes take effect on the very next push since _mic_push always
+// reads the current saved settings, so no Python changes were needed here.
+let _liveActive = false;
+
+async function startLiveView() {
+  if (_micUser) return;
+  try {
+    const sr = await _micAcquire('live', batch => {
+      if (window.pySpecMicPush) window.pySpecMicPush(batch);
+    });
+    if (window.pySpecMicStart) window.pySpecMicStart('live', sr);
+    _liveActive = true;
+    _enterLiveUI();
+  } catch (e) {
+    document.getElementById('live-status').textContent = 'mic error: ' + e.message.slice(0, 60);
+    document.getElementById('live-status').className = 'sp-panel-status err';
+    stopLiveView();
+  }
+}
+
+function stopLiveView() {
+  if (!_liveActive) { _micRelease(); return; }
+  _micRelease();
+  if (window.pySpecMicStop) window.pySpecMicStop();
+  _liveActive = false;
+  _exitLiveUI();
+}
+
+window.specToggleLive = function() {
+  if (_liveActive) stopLiveView();
+  else startLiveView();
+};
+
+function _enterLiveUI() {
+  const btn = document.getElementById('live-btn');
+  btn.textContent = '⏹ Stop Live';
+  btn.classList.add('recording');
+  const st = document.getElementById('live-status');
+  st.textContent = 'listening…';
+  st.className = 'sp-panel-status ok';
+  ['mic-btn-a', 'mic-btn-b'].forEach(id => { document.getElementById(id).disabled = true; });
+}
+
+function _exitLiveUI() {
+  const btn = document.getElementById('live-btn');
+  btn.textContent = '🎙 Start Live';
+  btn.classList.remove('recording');
+  const st = document.getElementById('live-status');
+  st.textContent = 'stopped';
+  st.className = 'sp-panel-status';
+  ['mic-btn-a', 'mic-btn-b'].forEach(id => { document.getElementById(id).disabled = false; });
 }
 
 // ── Preferences modal ────────────────────────────────────────────────
@@ -816,4 +936,7 @@ document.addEventListener('DOMContentLoaded', () => {
   _initResizer();
   specSetMode('single');   // matches the HTML's default active button/classes
 });
-window.addEventListener('beforeunload', () => { if (_recordingSlot) stopRecording(); });
+window.addEventListener('beforeunload', () => {
+  if (_recordingSlot) stopRecording();
+  if (_liveActive) stopLiveView();
+});
