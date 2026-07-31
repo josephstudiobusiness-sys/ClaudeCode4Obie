@@ -8,7 +8,9 @@
  *
  * An arbitrary number of files can be loaded (or recorded from the mic),
  * tracked in `_files` and listed in the sidebar, Explore-style. From there:
- *   - Single  shows one "focused" file, full width.
+ *   - Single  shows the topmost sidebar-checked file, full width — the same
+ *             checkbox Compare uses, so checking/unchecking files switches
+ *             what Single shows too (highest-checked wins).
  *   - Compare stacks up to 4 files whose sidebar checkbox is ticked, as rows.
  *   - Difference/Mirror operate on exactly two files, chosen via the small
  *     ①/② buttons on each sidebar row.
@@ -33,7 +35,6 @@ function _freshFile(id, name) {
 }
 let _files = [];
 let _nextId = 1;
-let _focusedId = null;   // Single-mode target
 let _diffId1 = null;     // "①" — Difference/Mirror
 let _diffId2 = null;     // "②" — Difference/Mirror
 
@@ -43,12 +44,22 @@ function _esc(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// Single mode has no separate "focus" concept — it shows whichever checked
+// (Compare-selected) file sits highest in the list, so the same checkbox
+// controls both "included in Compare's rows" and "the current Single-view
+// pick." Checking a higher file bumps it in front of ones already checked;
+// unchecking it reveals the next-highest checked file underneath.
+function _singleTargetId() {
+  const f = _files.find(x => x.compareSelected);
+  return f ? f.id : null;
+}
+
 // New files are auto-enrolled into the two "active" comparisons — Compare
-// selection (up to 4) and the Difference ①/② pair — so the tool has
-// something to show immediately, while the sidebar's checkbox/①/② controls
-// remain free to override the choice at any time.
+// selection (up to 4, which doubles as Single mode's pick) and the
+// Difference ①/② pair — so the tool has something to show immediately,
+// while the sidebar's checkbox/①/② controls remain free to override the
+// choice at any time.
 function _autoAssignNewFile(f) {
-  if (_focusedId == null) _focusedId = f.id;
   if (_diffId1 == null) _diffId1 = f.id;
   else if (_diffId2 == null && f.id !== _diffId1) _diffId2 = f.id;
   if (_files.filter(x => x.compareSelected).length < 4) f.compareSelected = true;
@@ -684,15 +695,15 @@ window.specToggleFreqScale = function() {
 };
 
 // ── Single vs Compare vs Difference vs Live mode ────────────────────────
-// Single shows the "focused" file (click a name in the sidebar), full
-// width. Compare stacks up to 4 sidebar-checked files as rows. Difference
-// computes ①'s spectrogram minus ②'s (interpolated onto ①'s frequency/time
-// grid — see main.py's _compute_diff) so intensity differences show as
-// "mountains and valleys" rather than raw dB.
+// Single shows the highest-checked file (see _singleTargetId), full width.
+// Compare stacks up to 4 sidebar-checked files as rows. Difference computes
+// ①'s spectrogram minus ②'s (interpolated onto ①'s frequency/time grid —
+// see main.py's _compute_diff) so intensity differences show as "mountains
+// and valleys" rather than raw dB.
 let _diffCache = null;
 
 function _panelIdsForMode() {
-  if (_mode === 'single') return _focusedId != null ? [_focusedId] : [];
+  if (_mode === 'single') { const id = _singleTargetId(); return id != null ? [id] : []; }
   if (_mode === 'compare') return _files.filter(f => f.compareSelected).slice(0, 4).map(f => f.id);
   return [];
 }
@@ -702,7 +713,7 @@ function _rebuildComparePanels() {
   const ids = _panelIdsForMode();
   if (!ids.length) {
     el.innerHTML = `<div class="sp-file-empty" style="margin:auto;font-size:12px">` +
-      (_mode === 'single' ? 'Load a file, or hit Record, to see its spectrogram'
+      (_mode === 'single' ? 'Tick a file’s checkbox in the sidebar to see it here'
         : 'Tick the checkbox on up to 4 sidebar files to compare them') +
       `</div>`;
     return;
@@ -808,13 +819,14 @@ function _renderFileList() {
     box.innerHTML = '<div class="sp-file-empty">Load a file, or hit Record, to get started</div>';
     return;
   }
+  const singleId = _singleTargetId();
   box.innerHTML = _files.map((f, i) => {
     const num = i + 1;
-    return `<div class="sp-file-row${f.id === _focusedId ? ' focused' : ''}${f.recording ? ' recording' : ''}" data-id="${f.id}">
+    return `<div class="sp-file-row${f.id === singleId ? ' focused' : ''}${f.recording ? ' recording' : ''}" data-id="${f.id}">
       <div class="sp-file-row-top">
         <span class="sp-file-num">${num}.</span>
-        <input type="checkbox" class="sp-file-cmp" data-id="${f.id}"${f.compareSelected ? ' checked' : ''} title="Select for Compare (up to 4 at once)">
-        <span class="sp-file-name" data-id="${f.id}" title="${_esc(f.name)} — click to focus in Single view">${_esc(f.name)}</span>
+        <input type="checkbox" class="sp-file-cmp" data-id="${f.id}"${f.compareSelected ? ' checked' : ''} title="Compare (up to 4) — also controls Single: the topmost checked file is shown there">
+        <span class="sp-file-name" title="${_esc(f.name)}">${_esc(f.name)}</span>
         <button class="sp-file-remove" data-id="${f.id}" title="Remove" ${f.recording ? 'disabled' : ''}>✕</button>
       </div>
       <div class="sp-file-status ${f.statusCls}">${_esc(f.status)}</div>
@@ -829,7 +841,6 @@ function _renderFileList() {
   }).join('');
 
   box.querySelectorAll('.sp-file-cmp').forEach(cb => cb.addEventListener('change', e => _toggleCompareSelect(e.target.dataset.id, e.target.checked)));
-  box.querySelectorAll('.sp-file-name').forEach(el => el.addEventListener('click', e => _focusFile(e.target.dataset.id)));
   box.querySelectorAll('.sp-file-remove').forEach(el => el.addEventListener('click', e => _removeFile(e.target.dataset.id)));
   box.querySelectorAll('.play-btn').forEach(el => el.addEventListener('click', e => togglePlay(e.target.dataset.id)));
   box.querySelectorAll('.chan-btn').forEach(el => el.addEventListener('click', e => window.specToggleChannel(e.target.dataset.id)));
@@ -843,21 +854,15 @@ function _toggleCompareSelect(id, checked) {
   if (checked && _files.filter(x => x.compareSelected).length >= 4) checked = false;   // cap at 4
   f.compareSelected = checked;
   _renderFileList();
-  if (_mode === 'compare') _rebuildComparePanels();
-}
-
-function _focusFile(id) {
-  if (_focusedId === id) return;
-  _focusedId = id;
-  _renderFileList();
-  if (_mode === 'single') _rebuildComparePanels();
+  // This checkbox drives both Compare's row set and Single's pick (the
+  // topmost checked file), so either mode may need its panels rebuilt.
+  if (_mode === 'compare' || _mode === 'single') _rebuildComparePanels();
 }
 
 function _removeFile(id) {
   const f = _getFile(id);
   if (!f || f.recording) return;
   _files = _files.filter(x => x.id !== id);
-  if (_focusedId === id) _focusedId = _files[0] ? _files[0].id : null;
   if (_diffId1 === id) _diffId1 = null;
   if (_diffId2 === id) _diffId2 = null;
   if (_playingId === id) _stopPlayback();

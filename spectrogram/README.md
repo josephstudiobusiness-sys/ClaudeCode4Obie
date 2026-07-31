@@ -30,14 +30,18 @@ with them:
   physical microphone).
 
 Each sidebar row carries everything about that file: a checkbox (Compare
-selection), the number/name (click the name to focus it in Single view), a
-▶ play button, an L/R channel chip when stereo, ①/② buttons (Difference/
-Mirror pairing — see below), and a ✕ to remove it.
+selection — this same checkbox also drives Single mode, see below), the
+number/name, a ▶ play button, an L/R channel chip when stereo, ①/② buttons
+(Difference/Mirror pairing — see below), and a ✕ to remove it.
 
 Four view modes, via the toolbar:
 
-- **🔎 Single** (default) — just the *focused* file, full width. Click any
-  filename in the sidebar to focus it.
+- **🔎 Single** (default) — one file, full width: whichever checked file
+  sits **highest in the sidebar list**. There's no separate "focus" click —
+  the same checkbox Compare uses picks Single's file too, so ticking a file
+  further up the list switches Single to show it, and unticking the
+  top-most checked file falls back to the next one down. With files 2-5
+  checked, Single shows 2; check 1 and it takes over.
 - **🆚 Compare** — every file whose sidebar checkbox is ticked, stacked as
   **rows**, up to **4 at a time**. Ticking a 5th box while 4 are already
   selected is a no-op — untick one first.
