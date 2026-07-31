@@ -290,18 +290,6 @@ function _axisTitle(text) {
   return { text, font: { size: 40, family: 'Arial, sans-serif', color: cssVar('--text') || '#1a1a1a' } };
 }
 
-// "Rotate 90°" toggle for 3D Surface — a quick preset switch between two
-// fixed viewing angles, not a change to what the axes mean. Plotly's own
-// default camera (unspecified) is roughly {x:1.25,y:1.25,z:1.25}; the
-// rotated preset spins that 90° around the vertical (Z/dB) axis, so what
-// reads as "depth" and "width" swap without touching the underlying data.
-// (Dragging the plot still free-rotates it same as before — this is just a
-// known reference point to snap back to.)
-let _rotate3D = false;
-function _camera3D() {
-  return { eye: _rotate3D ? { x: 1.25, y: -1.25, z: 1.25 } : { x: 1.25, y: 1.25, z: 1.25 } };
-}
-
 // ── Multi-view rendering: heatmap / 3D surface / waterfall ─────────────
 // Shared by every panel and the Difference view — `isDiff` selects a
 // diverging, zero-centred colour range so peaks/dips read as +/- dB.
@@ -378,7 +366,6 @@ function _renderGrid(divId, cache, title, isDiff, forceMode, range) {
         xaxis: { title: _axisTitle('Time (s)') },
         yaxis: { title: _axisTitle('Frequency (Hz)'), type: _logFreq ? 'log' : 'linear' },
         zaxis: { title: _axisTitle(isDiff ? 'ΔdB' : 'dB'), range: (!isDiff && range) ? [range.min, range.max] : undefined },
-        camera: _camera3D(),
       },
       margin: { l: 30, r: 30, t: 28, b: 30 },
     }, _pcfg);
@@ -546,7 +533,6 @@ function _renderMirror3DIndependent(divId, title, aCache, bCache) {
       xaxis: { title: _axisTitle('Time (s)') },
       yaxis: { title: _axisTitle('Frequency (Hz)'), type: _logFreq ? 'log' : 'linear' },
       zaxis: { title: _axisTitle('dB') },
-      camera: _camera3D(),
     },
     margin: { l: 30, r: 30, t: 28, b: 30 },
   }, _pcfg);
@@ -599,14 +585,7 @@ window.specToggleMirror3D = function() {
   _updateDiffLegend();
   _updateMirrorAxisBtn();
   _updateMirrorStyleBtn();
-  _updateRotate3DBtn();
   if (_mode === 'diff') _renderMirror('diff-plot', _diffTitle());
-};
-
-window.specToggleRotate3D = function() {
-  _rotate3D = !_rotate3D;
-  document.getElementById('rotate-3d-btn').textContent = _rotate3D ? 'View: Rotated 90°' : 'View: Default';
-  specRenderAll();
 };
 
 // The mirror-axis toggle only makes sense in flat Mirror mode — 3D doesn't
@@ -622,16 +601,6 @@ function _updateMirrorAxisBtn() {
 function _updateMirror3DBtn() {
   const btn = document.getElementById('mirror-3d-btn');
   const show = _mode === 'diff' && document.getElementById('view-mode-sel').value === 'mirror';
-  btn.style.display = show ? '' : 'none';
-}
-
-// The rotate toggle applies wherever a 3D surface is actually being drawn:
-// Plot type = 3D Surface (any mode), or Difference mode's Mirror view with
-// its own 3D toggle on.
-function _updateRotate3DBtn() {
-  const btn = document.getElementById('rotate-3d-btn');
-  const viewMode = document.getElementById('view-mode-sel').value;
-  const show = viewMode === 'surface' || (_mode === 'diff' && viewMode === 'mirror' && _mirror3D);
   btn.style.display = show ? '' : 'none';
 }
 
@@ -664,7 +633,6 @@ window.specViewModeChanged = function() {
   _updateMirrorAxisBtn();
   _updateMirror3DBtn();
   _updateMirrorStyleBtn();
-  _updateRotate3DBtn();
   const mode = document.getElementById('view-mode-sel').value;
   // Flat Mirror renders straight from ①/②'s own already-computed
   // spectrograms, no interpolated diff grid needed — but Mirror's 3D
@@ -795,7 +763,6 @@ window.specSetMode = function(mode) {
   _updateMirrorAxisBtn();
   _updateMirror3DBtn();
   _updateMirrorStyleBtn();
-  _updateRotate3DBtn();
   // Leaving Live mode releases the mic promptly rather than leaving it hot
   // in the background — same reasoning as the beforeunload safety net below.
   if (prevMode === 'live' && mode !== 'live' && _liveActive) stopLiveView();
