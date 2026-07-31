@@ -287,7 +287,7 @@ function renderSpec(id) {
 // invisibly even though it's set correctly in the data. Spelling out a real
 // font here (and a decent size) is what actually puts the label on screen.
 function _axisTitle(text) {
-  return { text, font: { size: 12, family: 'Arial, sans-serif', color: cssVar('--text') || '#1a1a1a' } };
+  return { text, font: { size: 40, family: 'Arial, sans-serif', color: cssVar('--text') || '#1a1a1a' } };
 }
 
 // ── Multi-view rendering: heatmap / 3D surface / waterfall ─────────────
@@ -367,7 +367,7 @@ function _renderGrid(divId, cache, title, isDiff, forceMode, range) {
         yaxis: { title: _axisTitle('Frequency (Hz)'), type: _logFreq ? 'log' : 'linear' },
         zaxis: { title: _axisTitle(isDiff ? 'ΔdB' : 'dB'), range: (!isDiff && range) ? [range.min, range.max] : undefined },
       },
-      margin: { l: 10, r: 10, t: 28, b: 10 },
+      margin: { l: 30, r: 30, t: 28, b: 30 },
     }, _pcfg);
   } else if (mode === 'waterfall') {
     const zT = _transpose(zDb);   // (nTimes rows × nFreqs cols) — one row per time frame
@@ -534,7 +534,7 @@ function _renderMirror3DIndependent(divId, title, aCache, bCache) {
       yaxis: { title: _axisTitle('Frequency (Hz)'), type: _logFreq ? 'log' : 'linear' },
       zaxis: { title: _axisTitle('dB') },
     },
-    margin: { l: 10, r: 10, t: 28, b: 10 },
+    margin: { l: 30, r: 30, t: 28, b: 30 },
   }, _pcfg);
 }
 
