@@ -281,6 +281,15 @@ function renderSpec(id) {
   renderFrameInfo(id, cache.times, cache.freqs);
 }
 
+// 3D scenes are WebGL-rendered, unlike the SVG text everywhere else in the
+// page — they don't reliably resolve the layout's 'inherit' font-family the
+// way 2D plots do, so an axis title left at the default can render
+// invisibly even though it's set correctly in the data. Spelling out a real
+// font here (and a decent size) is what actually puts the label on screen.
+function _axisTitle(text) {
+  return { text, font: { size: 12, family: 'Arial, sans-serif', color: cssVar('--text') || '#1a1a1a' } };
+}
+
 // ── Multi-view rendering: heatmap / 3D surface / waterfall ─────────────
 // Shared by every panel and the Difference view — `isDiff` selects a
 // diverging, zero-centred colour range so peaks/dips read as +/- dB.
@@ -354,11 +363,11 @@ function _renderGrid(divId, cache, title, isDiff, forceMode, range) {
       font: { size: 10, family: 'inherit' },
       paper_bgcolor: '#fff',
       scene: {
-        xaxis: { title: 'Time (s)' },
-        yaxis: { title: 'Frequency (Hz)', type: _logFreq ? 'log' : 'linear' },
-        zaxis: { title: isDiff ? 'ΔdB' : 'dB', range: (!isDiff && range) ? [range.min, range.max] : undefined },
+        xaxis: { title: _axisTitle('Time (s)') },
+        yaxis: { title: _axisTitle('Frequency (Hz)'), type: _logFreq ? 'log' : 'linear' },
+        zaxis: { title: _axisTitle(isDiff ? 'ΔdB' : 'dB'), range: (!isDiff && range) ? [range.min, range.max] : undefined },
       },
-      margin: { l: 0, r: 0, t: 28, b: 0 },
+      margin: { l: 10, r: 10, t: 28, b: 10 },
     }, _pcfg);
   } else if (mode === 'waterfall') {
     const zT = _transpose(zDb);   // (nTimes rows × nFreqs cols) — one row per time frame
@@ -521,11 +530,11 @@ function _renderMirror3DIndependent(divId, title, aCache, bCache) {
     font: { size: 10, family: 'inherit' },
     paper_bgcolor: '#fff',
     scene: {
-      xaxis: { title: 'Time (s)' },
-      yaxis: { title: 'Frequency (Hz)', type: _logFreq ? 'log' : 'linear' },
-      zaxis: { title: 'dB' },
+      xaxis: { title: _axisTitle('Time (s)') },
+      yaxis: { title: _axisTitle('Frequency (Hz)'), type: _logFreq ? 'log' : 'linear' },
+      zaxis: { title: _axisTitle('dB') },
     },
-    margin: { l: 0, r: 0, t: 28, b: 0 },
+    margin: { l: 10, r: 10, t: 28, b: 10 },
   }, _pcfg);
 }
 
