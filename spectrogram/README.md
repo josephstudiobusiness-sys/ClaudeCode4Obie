@@ -42,6 +42,17 @@ FFT window size, hop size, max frequency, **frequency smoothing**, colorscale,
 and the frequency-axis scale are all adjustable in the sidebar and apply to
 **both** samples, so the comparison is apples-to-apples.
 
+Sample A and Sample B are each drawn in their own Plotly figure, so left to
+their defaults they'd colour-scale independently — the hottest colour in A's
+panel could mean a completely different dB than the hottest colour in B's.
+To keep them genuinely comparable, whenever both samples are loaded, Heatmap
+and 3D Surface (colour *and* height) share one intensity range — the combined
+min/max of both samples — instead of each auto-scaling to its own data. This
+also holds for Mirror-by-time's two side-by-side heatmaps, and for Single
+mode's Sample A ↔ Sample B toggle, so the scale doesn't jump when you switch
+which one is showing. The Difference view's own colour range (zero-centred
+on ΔdB) is unaffected — that's a separate, already-shared computation.
+
 ### Frequency smoothing
 
 The **Smoothing** dropdown (¼ semitone up to a full octave) averages each

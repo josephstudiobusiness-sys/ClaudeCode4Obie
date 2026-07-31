@@ -151,7 +151,14 @@ window.onSpecSpectrogramResult = function(slot, channel, times_js, freqs_js, fla
   }
   const s = slots[slot];
   if (channel === 'r') s.rCache = cache; else s.lCache = cache;
-  if (s.showChannel === channel) renderSpec(slot);
+  if (s.showChannel === channel) {
+    renderSpec(slot);
+    // The other panel's own data hasn't changed, but the shared intensity
+    // range this update may have shifted (see _sharedSampleRange) — redraw
+    // it too so both panels stay on the same scale.
+    const other = slot === 'a' ? 'b' : 'a';
+    if (slots[other].lCache || slots[other].rCache) renderSpec(other);
+  }
 };
 
 // zDb from _unpackSpec is (nFreqBins rows × nTimeFrames cols) — already the
@@ -169,13 +176,35 @@ function _transpose(z) {
   return t;
 }
 
+function _dataMinMax(zDb) {
+  let lo = Infinity, hi = -Infinity;
+  for (const row of zDb) for (const v of row) if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  return { min: lo, max: hi };
+}
+
+// Sample A and Sample B are separate Plotly figures, so with no explicit
+// range each one auto-scales its heatmap/surface to its OWN min/max — the
+// hottest colour in A's panel and the hottest colour in B's panel can end up
+// meaning two different dB values. When both are loaded, share one range
+// (their combined min/max) across both panels so a given dB reads as the
+// same colour/height everywhere, exactly like the diff view already does
+// with its zero-centred range.
+function _sharedSampleRange(slot) {
+  const other = slot === 'a' ? 'b' : 'a';
+  const mine   = slots[slot].showChannel  === 'r' ? slots[slot].rCache  : slots[slot].lCache;
+  const theirs = slots[other].showChannel === 'r' ? slots[other].rCache : slots[other].lCache;
+  if (!mine || !theirs) return null;
+  const a = _dataMinMax(mine.zDb), b = _dataMinMax(theirs.zDb);
+  return { min: Math.min(a.min, b.min), max: Math.max(a.max, b.max) };
+}
+
 function renderSpec(slot) {
   const s = slots[slot];
   const cache = s.showChannel === 'r' ? s.rCache : s.lCache;
   if (!cache) return;
   const label = _recordingSlot === slot ? ' · Live'
     : s.isStereo ? (s.showChannel === 'r' ? ' · R channel' : ' · L channel') : '';
-  _renderGrid(`spec-plot-${slot}`, cache, 'Spectrogram' + label, false);
+  _renderGrid(`spec-plot-${slot}`, cache, 'Spectrogram' + label, false, undefined, _sharedSampleRange(slot));
   renderFrameInfo(slot, cache.times, cache.freqs);
 }
 
@@ -218,7 +247,7 @@ function _waterfallTraces(freqs, times, zT, isDiff) {
   return traces;
 }
 
-function _renderGrid(divId, cache, title, isDiff, forceMode) {
+function _renderGrid(divId, cache, title, isDiff, forceMode, range) {
   let mode = forceMode || document.getElementById('view-mode-sel').value;
 
   // Mirror is a Difference-only view (it juxtaposes Sample A and Sample B
@@ -246,6 +275,7 @@ function _renderGrid(divId, cache, title, isDiff, forceMode) {
     // A-is-red/B-is-blue convention (see the legend in the diff toolbar), so
     // flip it: negative (B louder) → blue, positive (A louder) → red.
     if (isDiff) { const m = _maxAbs(zDb); trace.cmin = -m; trace.cmax = m; trace.reversescale = true; }
+    else if (range) { trace.cmin = range.min; trace.cmax = range.max; }
     Plotly.react(divId, [trace], {
       title: { text: title, font: { size: 11 }, pad: { t: 2, b: 0 } },
       font: { size: 10, family: 'inherit' },
@@ -253,7 +283,7 @@ function _renderGrid(divId, cache, title, isDiff, forceMode) {
       scene: {
         xaxis: { title: 'Time (s)' },
         yaxis: { title: 'Frequency (Hz)', type: _logFreq ? 'log' : 'linear' },
-        zaxis: { title: isDiff ? 'ΔdB' : 'dB' },
+        zaxis: { title: isDiff ? 'ΔdB' : 'dB', range: (!isDiff && range) ? [range.min, range.max] : undefined },
       },
       margin: { l: 0, r: 0, t: 28, b: 0 },
     }, _pcfg);
@@ -270,6 +300,7 @@ function _renderGrid(divId, cache, title, isDiff, forceMode) {
       colorbar: { title: isDiff ? 'ΔdB' : 'dB', titleside: 'right', thickness: 10, len: 0.95, tickfont: { size: 9 } },
       zsmooth: 'fast', hovertemplate: hoverTemplate3D };
     if (isDiff) { const m = _maxAbs(zDb); trace.zmin = -m; trace.zmax = m; trace.reversescale = true; }
+    else if (range) { trace.zmin = range.min; trace.zmax = range.max; }
     Plotly.react(divId, [trace], _wl(title, 'Time (s)', 'Frequency (Hz)', {
       margin: { l: 50, r: 45, t: 26, b: 34 },
       yaxis: { type: _logFreq ? 'log' : 'linear' },
@@ -376,13 +407,18 @@ function _renderMirrorByTime(divId, title, aCache, bCache) {
   const custB = bCache.freqs.map(f => bCache.times.map(() => f));
   const colorscale = document.getElementById('colorscale-sel').value;
   const fMax = Math.max(aCache.freqs.at(-1), bCache.freqs.at(-1));
+  // Two heatmap traces in one figure still auto-scale colour independently
+  // unless given the same explicit range — share one so a given dB reads as
+  // the same colour on both sides of the mirror.
+  const rangeA = _dataMinMax(aCache.zDb), rangeB = _dataMinMax(bCache.zDb);
+  const zmin = Math.min(rangeA.min, rangeB.min), zmax = Math.max(rangeA.max, rangeB.max);
 
   Plotly.react(divId, [
     { x: aCache.times, y: aCache.freqs.map(f => -f), z: aCache.zDb, customdata: custA,
-      type: 'heatmap', colorscale, showscale: false, zsmooth: 'fast',
+      type: 'heatmap', colorscale, showscale: false, zsmooth: 'fast', zmin, zmax,
       hovertemplate: 'Sample A<br>Time: %{x:.3f} s<br>Freq: %{customdata:.0f} Hz<br>Level: %{z:.1f} dB<extra></extra>' },
     { x: bCache.times, y: bCache.freqs, z: bCache.zDb, customdata: custB,
-      type: 'heatmap', colorscale, showscale: true,
+      type: 'heatmap', colorscale, showscale: true, zmin, zmax,
       colorbar: { title: 'dB', titleside: 'right', thickness: 10, len: 0.95, tickfont: { size: 9 } }, zsmooth: 'fast',
       hovertemplate: 'Sample B<br>Time: %{x:.3f} s<br>Freq: %{customdata:.0f} Hz<br>Level: %{z:.1f} dB<extra></extra>' },
   ], _wl(title, 'Time (s)', '↓ Sample A · Frequency (Hz) · Sample B ↑', {
@@ -598,6 +634,10 @@ window.specToggleChannel = function(slot) {
   s.showChannel = s.showChannel === 'l' ? 'r' : 'l';
   updateChanBtn(slot);
   renderSpec(slot);
+  // Switching channel changed which data feeds the shared range (see
+  // _sharedSampleRange) — refresh the other panel so it stays in sync.
+  const other = slot === 'a' ? 'b' : 'a';
+  if (slots[other].lCache || slots[other].rCache) renderSpec(other);
 };
 
 window.specToggleFreqScale = function() {
