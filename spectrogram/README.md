@@ -169,25 +169,32 @@ and releases the mic automatically.
 ### Visualizer
 
 Toggle **🌀 Visualizer** for a circular take on the same spectrogram data —
-frequency runs **around the circumference** (sweeping a full turn from 0 Hz
-up to the file's max frequency), **time is the radius** (centre = start,
-edge = end), and colour is dB, same as Heatmap. A dotted spoke plus **"0
-Hz"**/**"‹max› Hz"** labels mark the seam where the sweep starts and wraps
-back around — they sit right next to each other, since 0 Hz and the max
-frequency are the same angular position (a full turn). It shows whichever
-file Single would show (the topmost sidebar-checked one) — there's no
-separate picker, so ticking a different file's checkbox updates both at
-once. Hover any point for the exact frequency/time/dB, same as the other
-views.
+frequency runs **around the circumference, starting at 12 o'clock and
+sweeping clockwise** (like a dial) from 0 Hz up to the file's max frequency,
+**time is the radius** (centre = start, edge = end), and colour is dB, same
+as Heatmap. A dotted spoke plus **"0 Hz"**/**"‹max› Hz"** labels mark the
+seam at the top where the sweep starts and wraps back around — they sit
+right next to each other, since 0 Hz and the max frequency are the same
+angular position (a full turn) — and shorter tick marks with compact labels
+(200, 400, 600, 1k, 2k, 3k, 5k, 7k — whichever actually fall under the
+file's max frequency) mark the rest of the way around as a reference scale.
+It shows whichever file Single would show (the topmost sidebar-checked
+one) — there's no separate picker, so ticking a different file's checkbox
+updates both at once. Hover any point for the exact frequency/time/dB, same
+as the other views.
 
 Plotly has no native polar heatmap trace, so this reuses the 3D `surface`
-machinery the tool already relies on elsewhere: a perfectly flat disc
-(every point at height 0) with `(x, y)` computed per grid point as
-`(r·cosθ, r·sinθ)` instead of the usual straight-line time/frequency
-coordinates, and colour driven by `surfacecolor` instead of height, with
-flat lighting so it reads as pure colour rather than a shaded 3D object.
-The **View** selector (Heatmap/3D Surface/Waterfall/Mirror) doesn't apply
-here — Visualizer is its own fixed layout, not one more Plot type option.
+machinery the tool already relies on elsewhere: a disc with `(x, y)`
+computed per grid point as `(r·cosθ, r·sinθ)` instead of the usual
+straight-line time/frequency coordinates, and colour driven by
+`surfacecolor` instead of height, with flat lighting so it reads as pure
+colour rather than a shaded 3D object. The disc isn't perfectly flat,
+though — height carries a small (visually negligible from the top-down
+camera) variation driven by dB, because a truly flat surface is degenerate
+geometry for Plotly's WebGL picker and silently breaks hover; giving it
+genuine (if tiny) relief is what makes hover actually work. The **View**
+selector (Heatmap/3D Surface/Waterfall/Mirror) doesn't apply here —
+Visualizer is its own fixed layout, not one more Plot type option.
 
 All signal processing is delegated to the canonical ObieApp Python modules,
 loaded live from GitHub at runtime — none of it is reimplemented here (see

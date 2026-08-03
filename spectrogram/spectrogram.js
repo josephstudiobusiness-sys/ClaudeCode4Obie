@@ -787,33 +787,86 @@ function _renderVisualizer() {
   const tMax = times[times.length - 1] || 1;
   const innerR = 0.15;   // small hole at the centre so t=0 isn't a singular point
   const outerR = 1;
+
+  // 0 Hz at 12 o'clock, sweeping clockwise up to fMax back at 12 o'clock —
+  // matches a clock face / dial, which is the natural reading direction for
+  // a circular frequency sweep.
+  const thetaOf = freq => Math.PI / 2 - 2 * Math.PI * (freq / fMax);
+
+  // A flat surface (z constant everywhere) is degenerate geometry for
+  // Plotly's WebGL surface picker — it has no genuine normal to hit-test
+  // against, which is why hover silently didn't work. Giving z a small
+  // real variation (driven by dB, so it's not even arbitrary) fixes hover
+  // while staying visually flat from the top-down camera — the same fix
+  // recommended for this exact class of Plotly gl-surface3d issue.
+  const dbRange = _dataMinMax(zDb);
+  const dbSpan = (dbRange.max - dbRange.min) || 1;
+  const Z_SCALE = 0.05;
+
   const x = [], y = [], z = [], customdata = [];
   for (let i = 0; i < freqs.length; i++) {
-    const theta = 2 * Math.PI * (freqs[i] / fMax);
+    const theta = thetaOf(freqs[i]);
     const xRow = [], yRow = [], zRow = [], cdRow = [];
     for (let j = 0; j < times.length; j++) {
       const r = innerR + (outerR - innerR) * (tMax ? times[j] / tMax : 0);
       xRow.push(r * Math.cos(theta));
       yRow.push(r * Math.sin(theta));
-      zRow.push(0);
+      zRow.push(Z_SCALE * (zDb[i][j] - dbRange.min) / dbSpan);
       cdRow.push([freqs[i], times[j]]);
     }
     x.push(xRow); y.push(yRow); z.push(zRow); customdata.push(cdRow);
   }
 
-  // theta=0 is where the sweep both starts (0 Hz) and wraps back to fMax —
-  // the same point, since freqs[last]/fMax === 1 puts the last bin at a
-  // full 2π turn. A short radial spoke plus two labels either side of it
-  // (a hair short of/past theta=0) mark exactly where that seam is, rather
-  // than leaving the reader to guess which direction frequency increases.
-  const spoke = {
-    type: 'scatter3d', mode: 'lines', x: [innerR, outerR], y: [0, 0], z: [0, 0],
-    line: { color: cssVar('--muted') || '#5a5f6a', width: 2, dash: 'dot' },
+  // thetaOf(0) === thetaOf(fMax) mod 2π — the sweep starts and wraps back
+  // at the exact same angle. A dotted spoke plus two labels either side of
+  // it mark that seam; shorter solid ticks + compact labels at a handful of
+  // round frequencies (only the ones that actually fit under fMax) give a
+  // reference scale the rest of the way around.
+  const muted = cssVar('--muted') || '#5a5f6a';
+  const textColor = cssVar('--text') || '#1a1a1a';
+  const seamSpoke = {
+    type: 'scatter3d', mode: 'lines', x: [innerR, outerR], y: [], z: [],
+    line: { color: muted, width: 2, dash: 'dot' },
     hoverinfo: 'skip', showlegend: false,
   };
-  const labelR = outerR + 0.18;
-  const eps = 0.09;   // radians — small angular offset so the two labels don't overlap
-  const labelFont = { size: 11, family: 'Arial, sans-serif', color: cssVar('--text') || '#1a1a1a' };
+  {
+    const th = thetaOf(0);
+    seamSpoke.x = [innerR * Math.cos(th), outerR * Math.cos(th)];
+    seamSpoke.y = [innerR * Math.sin(th), outerR * Math.sin(th)];
+    seamSpoke.z = [0, 0];
+  }
+
+  const tickFreqs = [200, 400, 600, 1000, 2000, 3000, 5000, 7000].filter(fq => fq < fMax * 0.97);
+  const tickInnerR = outerR - 0.05, tickOuterR = outerR + 0.05;
+  const tickX = [], tickY = [], tickZ = [];
+  for (const fq of tickFreqs) {
+    const th = thetaOf(fq);
+    tickX.push(tickInnerR * Math.cos(th), tickOuterR * Math.cos(th), null);
+    tickY.push(tickInnerR * Math.sin(th), tickOuterR * Math.sin(th), null);
+    tickZ.push(0, 0, null);
+  }
+  const tickMarks = {
+    type: 'scatter3d', mode: 'lines', x: tickX, y: tickY, z: tickZ,
+    line: { color: muted, width: 1.5 }, hoverinfo: 'skip', showlegend: false,
+  };
+
+  const seamLabelR = outerR + 0.18, tickLabelR = outerR + 0.13;
+  const eps = 0.09;   // radians — small angular offset so the two seam labels don't overlap
+  const seamFont = { size: 11, family: 'Arial, sans-serif', color: textColor };
+  const tickFont = { size: 9, family: 'Arial, sans-serif', color: muted };
+  const freqTickLabel = fq => fq >= 1000 ? `${fq / 1000}k` : `${fq}`;
+
+  const annotations = [
+    { x: seamLabelR * Math.cos(thetaOf(0) + eps), y: seamLabelR * Math.sin(thetaOf(0) + eps), z: 0,
+      text: '0 Hz', showarrow: false, font: seamFont },
+    { x: seamLabelR * Math.cos(thetaOf(0) - eps), y: seamLabelR * Math.sin(thetaOf(0) - eps), z: 0,
+      text: `${fMax.toFixed(0)} Hz`, showarrow: false, font: seamFont },
+    ...tickFreqs.map(fq => {
+      const th = thetaOf(fq);
+      return { x: tickLabelR * Math.cos(th), y: tickLabelR * Math.sin(th), z: 0,
+        text: freqTickLabel(fq), showarrow: false, font: tickFont };
+    }),
+  ];
 
   const colorscale = document.getElementById('colorscale-sel').value;
   Plotly.react('visualizer-plot', [{
@@ -821,8 +874,8 @@ function _renderVisualizer() {
     colorbar: { title: 'dB', titleside: 'right', thickness: 10, tickfont: { size: 9 } },
     customdata,
     hovertemplate: 'Freq: %{customdata[0]:.0f} Hz<br>Time: %{customdata[1]:.3f} s<br>Level: %{surfacecolor:.1f} dB<extra></extra>',
-    lighting: { ambient: 1, diffuse: 0, specular: 0 },   // flat colour, no 3D shading on the flat disc
-  }, spoke], {
+    lighting: { ambient: 1, diffuse: 0, specular: 0 },   // flat colour, no 3D shading on the disc
+  }, seamSpoke, tickMarks], {
     title: {
       text: `Circular Spectrogram — frequency around the circumference (0–${fMax.toFixed(0)} Hz), time as radius`,
       font: { size: 11 }, pad: { t: 2, b: 0 },
@@ -832,15 +885,10 @@ function _renderVisualizer() {
     scene: {
       xaxis: { visible: false, range: [-1.4, 1.4] },
       yaxis: { visible: false, range: [-1.4, 1.4] },
-      zaxis: { visible: false, range: [-0.1, 0.1] },
+      zaxis: { visible: false, range: [-0.1, 0.2] },
       aspectmode: 'manual', aspectratio: { x: 1, y: 1, z: 0.05 },
       camera: { eye: { x: 0, y: 0, z: 1.8 }, up: { x: 0, y: 1, z: 0 } },
-      annotations: [
-        { x: labelR * Math.cos(eps), y: labelR * Math.sin(eps), z: 0,
-          text: '0 Hz', showarrow: false, font: labelFont, xanchor: 'left' },
-        { x: labelR * Math.cos(-eps), y: labelR * Math.sin(-eps), z: 0,
-          text: `${fMax.toFixed(0)} Hz`, showarrow: false, font: labelFont, xanchor: 'left', yanchor: 'top' },
-      ],
+      annotations,
     },
     margin: { l: 10, r: 10, t: 40, b: 10 },
   }, _pcfg);
