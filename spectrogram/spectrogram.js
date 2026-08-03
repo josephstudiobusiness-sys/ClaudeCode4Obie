@@ -11,7 +11,8 @@
  *   - Single  shows the topmost sidebar-checked file, full width — the same
  *             checkbox Compare uses, so checking/unchecking files switches
  *             what Single shows too (highest-checked wins).
- *   - Compare stacks up to 4 files whose sidebar checkbox is ticked, as rows.
+ *   - Compare stacks up to MAX_COMPARE files whose sidebar checkbox is
+ *             ticked, as rows.
  *   - Difference/Mirror operate on exactly two files, chosen via the small
  *     ①/② buttons on each sidebar row.
  *   - Live watches the microphone continuously without saving anything.
@@ -33,6 +34,7 @@ function _freshFile(id, name) {
     compareSelected: false, recording: false,
   };
 }
+const MAX_COMPARE = 6;   // most rows Compare mode will stack at once
 let _files = [];
 let _nextId = 1;
 let _diffId1 = null;     // "①" — Difference/Mirror
@@ -55,14 +57,14 @@ function _singleTargetId() {
 }
 
 // New files are auto-enrolled into the two "active" comparisons — Compare
-// selection (up to 4, which doubles as Single mode's pick) and the
-// Difference ①/② pair — so the tool has something to show immediately,
+// selection (up to MAX_COMPARE, which doubles as Single mode's pick) and
+// the Difference ①/② pair — so the tool has something to show immediately,
 // while the sidebar's checkbox/①/② controls remain free to override the
 // choice at any time.
 function _autoAssignNewFile(f) {
   if (_diffId1 == null) _diffId1 = f.id;
   else if (_diffId2 == null && f.id !== _diffId1) _diffId2 = f.id;
-  if (_files.filter(x => x.compareSelected).length < 4) f.compareSelected = true;
+  if (_files.filter(x => x.compareSelected).length < MAX_COMPARE) f.compareSelected = true;
 }
 
 let _mode = 'single';   // 'single' | 'compare' | 'diff' | 'live'
@@ -76,6 +78,7 @@ let _logFreq = false;
 
 Plotly.newPlot('diff-plot', [], _wl('Difference: ① − ②', 'Time (s)', 'Frequency (Hz)'), _pcfg);
 Plotly.newPlot('live-plot', [], _wl('Live Spectrogram', 'Time (s)', 'Frequency (Hz)'), _pcfg);
+Plotly.newPlot('visualizer-plot', [], _wl('Circular Spectrogram', '', '', {}), _pcfg);
 
 // ── File loading (WAV, MP3, or FRF files IFFT'd to an impulse response) ──
 // WAV bytes go straight to Python (scipy reads the format directly). MP3 —
@@ -124,7 +127,7 @@ function _loadOneFile(file) {
   _files.push(f);
   _autoAssignNewFile(f);
   _renderFileList();
-  if (_mode === 'single' || _mode === 'compare') _rebuildComparePanels();
+  _refreshCurrentView();
 
   const ext = (file.name.split('.').pop() || '').toLowerCase();
   const reader = new FileReader();
@@ -224,6 +227,7 @@ window.onSpecSpectrogramResult = function(slot, channel, times_js, freqs_js, fla
       // intensity range (see _sharedRangeAmong) this update may have shifted.
       shown.forEach(renderSpec);
     }
+    if (_mode === 'visualizer' && f.id === _singleTargetId()) _renderVisualizer();
   }
 };
 
@@ -287,7 +291,7 @@ function renderSpec(id) {
 // invisibly even though it's set correctly in the data. Spelling out a real
 // font here (and a decent size) is what actually puts the label on screen.
 function _axisTitle(text) {
-  return { text, font: { size: 40, family: 'Arial, sans-serif', color: cssVar('--text') || '#1a1a1a' } };
+  return { text, font: { size: 30, family: 'Arial, sans-serif', color: cssVar('--text') || '#1a1a1a' } };
 }
 
 // ── Multi-view rendering: heatmap / 3D surface / waterfall ─────────────
@@ -384,7 +388,7 @@ function _renderGrid(divId, cache, title, isDiff, forceMode, range) {
     if (isDiff) { const m = _maxAbs(zDb); trace.zmin = -m; trace.zmax = m; trace.reversescale = true; }
     else if (range) { trace.zmin = range.min; trace.zmax = range.max; }
     Plotly.react(divId, [trace], _wl(title, 'Time (s)', 'Frequency (Hz)', {
-      margin: { l: 50, r: 45, t: 26, b: 34 },
+      margin: { l: 50, r: 45, t: 14, b: 20 },
       yaxis: { type: _logFreq ? 'log' : 'linear' },
     }), _pcfg);
   }
@@ -678,6 +682,7 @@ function specSettingsChanged() {
 
 function specRenderAll() {
   _panelIdsForMode().forEach(renderSpec);
+  if (_mode === 'visualizer') _renderVisualizer();
   if (_mode !== 'diff') return;
   if (document.getElementById('view-mode-sel').value === 'mirror') {
     _renderMirror('diff-plot', _diffTitle());
@@ -693,6 +698,7 @@ window.specToggleChannel = function(id) {
   _renderFileList();
   const shown = _panelIdsForMode();
   if (shown.includes(id)) shown.forEach(renderSpec);
+  if (_mode === 'visualizer' && id === _singleTargetId()) _renderVisualizer();
 };
 
 window.specToggleFreqScale = function() {
@@ -705,7 +711,7 @@ window.specToggleFreqScale = function() {
 
 // ── Single vs Compare vs Difference vs Live mode ────────────────────────
 // Single shows the highest-checked file (see _singleTargetId), full width.
-// Compare stacks up to 4 sidebar-checked files as rows. Difference computes
+// Compare stacks up to MAX_COMPARE sidebar-checked files as rows. Difference computes
 // ①'s spectrogram minus ②'s (interpolated onto ①'s frequency/time grid —
 // see main.py's _compute_diff) so intensity differences show as "mountains
 // and valleys" rather than raw dB.
@@ -713,7 +719,7 @@ let _diffCache = null;
 
 function _panelIdsForMode() {
   if (_mode === 'single') { const id = _singleTargetId(); return id != null ? [id] : []; }
-  if (_mode === 'compare') return _files.filter(f => f.compareSelected).slice(0, 4).map(f => f.id);
+  if (_mode === 'compare') return _files.filter(f => f.compareSelected).slice(0, MAX_COMPARE).map(f => f.id);
   return [];
 }
 
@@ -723,7 +729,7 @@ function _rebuildComparePanels() {
   if (!ids.length) {
     el.innerHTML = `<div class="sp-file-empty" style="margin:auto;font-size:12px">` +
       (_mode === 'single' ? 'Tick a file’s checkbox in the sidebar to see it here'
-        : 'Tick the checkbox on up to 4 sidebar files to compare them') +
+        : `Tick the checkbox on up to ${MAX_COMPARE} sidebar files to compare them`) +
       `</div>`;
     return;
   }
@@ -739,6 +745,84 @@ function _rebuildComparePanels() {
     Plotly.newPlot(`spec-plot-${id}`, [], _wl(`#${_fileNum(id)} ${f.name}`, 'Time (s)', 'Frequency (Hz)'), _pcfg);
     renderSpec(id);
   });
+}
+
+// Refreshes whichever of Single/Compare/Visualizer is on screen — the one
+// thing all three call sites (a file loading, a checkbox changing, a file
+// being removed, a settings change) actually need, so they can call this
+// one function instead of remembering all three modes individually.
+function _refreshCurrentView() {
+  if (_mode === 'single' || _mode === 'compare') _rebuildComparePanels();
+  else if (_mode === 'visualizer') _renderVisualizer();
+}
+
+// ── Visualizer: circular spectrogram ────────────────────────────────────
+// Frequency runs around the circumference (0 Hz at angle 0, sweeping a full
+// turn up to the file's max frequency); time is the radius (centre = start,
+// edge = end); colour is dB, same as Heatmap. Shows whichever file Single
+// would show (the topmost sidebar-checked one) — no separate picker.
+//
+// Plotly has no native polar heatmap, so this reuses the 3D 'surface' trace
+// machinery already used elsewhere in the file: a perfectly flat disc
+// (z=0 everywhere) with manually-computed (x,y) = (r·cosθ, r·sinθ) per grid
+// point instead of the usual straight-line time/frequency coordinates, and
+// colour driven by surfacecolor instead of height. Flat lighting keeps the
+// disc reading as pure colour rather than a shaded 3D object.
+function _renderVisualizer() {
+  const id = _singleTargetId();
+  const f = id != null ? _getFile(id) : null;
+  const cache = f && (f.showChannel === 'r' ? f.rCache : f.lCache);
+  const statusEl = document.getElementById('visualizer-status');
+  if (!cache) {
+    statusEl.textContent = 'Tick a file’s checkbox in the sidebar to see it here';
+    statusEl.className = 'sp-panel-status';
+    Plotly.react('visualizer-plot', [], _wl('Circular Spectrogram', '', '', {}), _pcfg);
+    return;
+  }
+  statusEl.textContent = `#${_fileNum(id)} ${f.name}`;
+  statusEl.className = 'sp-panel-status ok';
+
+  const { times, freqs, zDb } = cache;   // zDb: nFreq rows x nTime cols
+  const fMax = freqs[freqs.length - 1] || 1;
+  const tMax = times[times.length - 1] || 1;
+  const innerR = 0.15;   // small hole at the centre so t=0 isn't a singular point
+  const x = [], y = [], z = [], customdata = [];
+  for (let i = 0; i < freqs.length; i++) {
+    const theta = 2 * Math.PI * (freqs[i] / fMax);
+    const xRow = [], yRow = [], zRow = [], cdRow = [];
+    for (let j = 0; j < times.length; j++) {
+      const r = innerR + (1 - innerR) * (tMax ? times[j] / tMax : 0);
+      xRow.push(r * Math.cos(theta));
+      yRow.push(r * Math.sin(theta));
+      zRow.push(0);
+      cdRow.push([freqs[i], times[j]]);
+    }
+    x.push(xRow); y.push(yRow); z.push(zRow); customdata.push(cdRow);
+  }
+
+  const colorscale = document.getElementById('colorscale-sel').value;
+  Plotly.react('visualizer-plot', [{
+    type: 'surface', x, y, z, surfacecolor: zDb, colorscale, showscale: true,
+    colorbar: { title: 'dB', titleside: 'right', thickness: 10, tickfont: { size: 9 } },
+    customdata,
+    hovertemplate: 'Freq: %{customdata[0]:.0f} Hz<br>Time: %{customdata[1]:.3f} s<br>Level: %{surfacecolor:.1f} dB<extra></extra>',
+    lighting: { ambient: 1, diffuse: 0, specular: 0 },   // flat colour, no 3D shading on the flat disc
+  }], {
+    title: {
+      text: `Circular Spectrogram — frequency around the circumference (0–${fMax.toFixed(0)} Hz), time as radius`,
+      font: { size: 11 }, pad: { t: 2, b: 0 },
+    },
+    font: { size: 10, family: 'inherit' },
+    paper_bgcolor: '#fff',
+    scene: {
+      xaxis: { visible: false, range: [-1.05, 1.05] },
+      yaxis: { visible: false, range: [-1.05, 1.05] },
+      zaxis: { visible: false, range: [-0.1, 0.1] },
+      aspectmode: 'manual', aspectratio: { x: 1, y: 1, z: 0.05 },
+      camera: { eye: { x: 0, y: 0, z: 1.8 }, up: { x: 0, y: 1, z: 0 } },
+    },
+    margin: { l: 10, r: 10, t: 40, b: 10 },
+  }, _pcfg);
 }
 
 function _diffTitle() {
@@ -757,9 +841,12 @@ window.specSetMode = function(mode) {
   document.getElementById('mode-single-btn').classList.toggle('active', mode === 'single');
   document.getElementById('mode-diff-btn').classList.toggle('active', mode === 'diff');
   document.getElementById('mode-live-btn').classList.toggle('active', mode === 'live');
-  document.getElementById('compare-view').style.display = (mode === 'diff' || mode === 'live') ? 'none' : '';
+  document.getElementById('mode-visualizer-btn').classList.toggle('active', mode === 'visualizer');
+  document.getElementById('compare-view').style.display =
+    (mode === 'diff' || mode === 'live' || mode === 'visualizer') ? 'none' : '';
   document.getElementById('diff-view').style.display = mode === 'diff' ? '' : 'none';
   document.getElementById('live-view').style.display = mode === 'live' ? '' : 'none';
+  document.getElementById('visualizer-view').style.display = mode === 'visualizer' ? '' : 'none';
   _updateMirrorAxisBtn();
   _updateMirror3DBtn();
   _updateMirrorStyleBtn();
@@ -777,6 +864,10 @@ window.specSetMode = function(mode) {
     if (el) setTimeout(() => Plotly.Plots.resize(el), 0);
   } else if (mode === 'live') {
     const el = document.getElementById('live-plot');
+    if (el) setTimeout(() => Plotly.Plots.resize(el), 0);
+  } else if (mode === 'visualizer') {
+    _renderVisualizer();
+    const el = document.getElementById('visualizer-plot');
     if (el) setTimeout(() => Plotly.Plots.resize(el), 0);
   }
 };
@@ -848,7 +939,7 @@ function _renderFileList() {
     return `<div class="sp-file-row${f.id === singleId ? ' focused' : ''}${f.recording ? ' recording' : ''}" data-id="${f.id}">
       <div class="sp-file-row-top">
         <span class="sp-file-num">${num}.</span>
-        <input type="checkbox" class="sp-file-cmp" data-id="${f.id}"${f.compareSelected ? ' checked' : ''} title="Compare (up to 4) — also controls Single: the topmost checked file is shown there">
+        <input type="checkbox" class="sp-file-cmp" data-id="${f.id}"${f.compareSelected ? ' checked' : ''} title="Compare (up to ${MAX_COMPARE}) — also controls Single: the topmost checked file is shown there">
         <span class="sp-file-name" title="${_esc(f.name)}">${_esc(f.name)}</span>
         <button class="sp-file-remove" data-id="${f.id}" title="Remove" ${f.recording ? 'disabled' : ''}>✕</button>
       </div>
@@ -874,12 +965,12 @@ function _renderFileList() {
 function _toggleCompareSelect(id, checked) {
   const f = _getFile(id);
   if (!f) return;
-  if (checked && _files.filter(x => x.compareSelected).length >= 4) checked = false;   // cap at 4
+  if (checked && _files.filter(x => x.compareSelected).length >= MAX_COMPARE) checked = false;   // cap
   f.compareSelected = checked;
   _renderFileList();
-  // This checkbox drives both Compare's row set and Single's pick (the
-  // topmost checked file), so either mode may need its panels rebuilt.
-  if (_mode === 'compare' || _mode === 'single') _rebuildComparePanels();
+  // This checkbox drives Compare's row set, Single's pick, and Visualizer's
+  // pick, so any of those modes may need a refresh.
+  _refreshCurrentView();
 }
 
 function _removeFile(id) {
@@ -890,7 +981,7 @@ function _removeFile(id) {
   if (_diffId2 === id) _diffId2 = null;
   if (_playingId === id) _stopPlayback();
   _renderFileList();
-  if (_mode === 'single' || _mode === 'compare') _rebuildComparePanels();
+  _refreshCurrentView();
   if (_mode === 'diff') { _diffCache = null; _maybeRequestDiff(); }
 }
 
@@ -995,7 +1086,7 @@ async function startRecording() {
   _files.push(f);
   _autoAssignNewFile(f);
   _renderFileList();
-  if (_mode === 'single' || _mode === 'compare') _rebuildComparePanels();
+  _refreshCurrentView();
   try {
     _micFullChunks = []; _micFullLen = 0;
     const sr = await _micAcquire(id, batch => {
@@ -1222,7 +1313,7 @@ function _initResizer() {
     if (!dragging) return;
     const w = Math.max(160, Math.min(360, startW + (e.clientX - startX)));
     sidebar.style.width = w + 'px';
-    const ids = ['diff-plot', 'live-plot', ..._panelIdsForMode().map(id => `spec-plot-${id}`)];
+    const ids = ['diff-plot', 'live-plot', 'visualizer-plot', ..._panelIdsForMode().map(id => `spec-plot-${id}`)];
     ids.forEach(pid => {
       const el = document.getElementById(pid);
       if (el && el.data) Plotly.Plots.resize(el);

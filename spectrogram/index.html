@@ -46,9 +46,10 @@
   <div class="sp-toolbar">
     <div class="tb-group">
       <button id="mode-single-btn" class="tb-btn active" onclick="specSetMode('single')" title="Show the topmost sidebar-checked file, full width">🔎 Single</button>
-      <button id="mode-compare-btn" class="tb-btn" onclick="specSetMode('compare')" title="Show up to 4 files selected in the sidebar, stacked as rows">🆚 Compare</button>
+      <button id="mode-compare-btn" class="tb-btn" onclick="specSetMode('compare')" title="Show up to 6 files selected in the sidebar, stacked as rows">🆚 Compare</button>
       <button id="mode-diff-btn" class="tb-btn" onclick="specSetMode('diff')" title="Show the intensity difference between the ① and ② files chosen in the sidebar">⛰ Difference</button>
       <button id="mode-live-btn" class="tb-btn" onclick="specSetMode('live')" title="Watch a live spectrogram of the microphone without saving it — handy for dialing in settings">🎙 Live</button>
+      <button id="mode-visualizer-btn" class="tb-btn" onclick="specSetMode('visualizer')" title="Circular view of the topmost sidebar-checked file — frequency around the circumference, time as radius">🌀 Visualizer</button>
     </div>
     <div class="tb-flex"></div>
     <button id="mirror-style-btn" class="tb-btn" onclick="specToggleMirrorStyle()" style="display:none"
@@ -122,6 +123,18 @@
         <div id="live-plot" class="plot-div"></div>
       </div>
       <div class="sp-panel-frameinfo" id="frame-info-live">–</div>
+    </div>
+
+    <!-- Full-width circular spectrogram — hidden until "🌀 Visualizer" mode is selected -->
+    <div class="sp-diffview" id="visualizer-view" style="display:none">
+      <div class="sp-panel-toolbar">
+        <span class="sp-panel-title">Visualizer</span>
+        <div class="tb-flex"></div>
+        <span class="sp-panel-status" id="visualizer-status">no file selected</span>
+      </div>
+      <div class="sp-plot-row" style="flex:1">
+        <div id="visualizer-plot" class="plot-div"></div>
+      </div>
     </div>
 
   </div><!-- sp-body -->
@@ -210,9 +223,10 @@
     <div class="modal-body sp-info-body">
       <p>Load a file (WAV, MP3, or FRF: TRF/TRV/AvC/AvR/CSV/MAT) or record from the mic — each becomes a numbered row in the sidebar list.</p>
       <p><strong>🔎 Single</strong> shows one file, full width — the same checkbox Compare uses picks it: whichever checked file sits highest in the sidebar list. Check a lower file to bring it forward; uncheck it to fall back to the next checked one below.</p>
-      <p><strong>🆚 Compare</strong> stacks the files whose checkbox is ticked in the sidebar, one row each, up to 4 at a time.</p>
+      <p><strong>🆚 Compare</strong> stacks the files whose checkbox is ticked in the sidebar, one row each, up to 6 at a time.</p>
       <p><strong>⛰ Difference</strong> shows the intensity difference between exactly two files — pick them with the small ① / ② buttons on each sidebar row. <strong>Mirror</strong> instead shows ① and ② side by side around a center line, without subtracting them.</p>
       <p><strong>🎙 Live</strong> watches the microphone continuously while you dial in FFT settings — nothing is saved.</p>
+      <p><strong>🌀 Visualizer</strong> shows the same file Single would show as a circle — frequency around the circumference, time as the radius, colour as dB.</p>
       <p>Only one microphone recording can run at a time.</p>
     </div>
   </div>

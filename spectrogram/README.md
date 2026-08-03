@@ -34,7 +34,7 @@ selection — this same checkbox also drives Single mode, see below), the
 number/name, a ▶ play button, an L/R channel chip when stereo, ①/② buttons
 (Difference/Mirror pairing — see below), and a ✕ to remove it.
 
-Four view modes, via the toolbar:
+Five view modes, via the toolbar:
 
 - **🔎 Single** (default) — one file, full width: whichever checked file
   sits **highest in the sidebar list**. There's no separate "focus" click —
@@ -43,10 +43,11 @@ Four view modes, via the toolbar:
   top-most checked file falls back to the next one down. With files 2-5
   checked, Single shows 2; check 1 and it takes over.
 - **🆚 Compare** — every file whose sidebar checkbox is ticked, stacked as
-  **rows**, up to **4 at a time**. Ticking a 5th box while 4 are already
+  **rows**, up to **6 at a time**. Ticking a 7th box while 6 are already
   selected is a no-op — untick one first.
 - **⛰ Difference** — see below.
 - **🎙 Live** — see "Live view" below.
+- **🌀 Visualizer** — see "Visualizer" below.
 
 FFT window size, hop size, max frequency, **frequency smoothing**, and
 colorscale live in the **⚙️ FFT Settings** button (top right) and apply to
@@ -164,6 +165,26 @@ two, same as during a recording. There's only one physical microphone, so
 Live and Recording are mutually exclusive — each disables the other's
 controls while active — and leaving Live mode (or closing the tab) stops it
 and releases the mic automatically.
+
+### Visualizer
+
+Toggle **🌀 Visualizer** for a circular take on the same spectrogram data —
+frequency runs **around the circumference** (0 Hz at the top, sweeping a
+full turn up to the file's max frequency), **time is the radius** (centre =
+start, edge = end), and colour is dB, same as Heatmap. It shows whichever
+file Single would show (the topmost sidebar-checked one) — there's no
+separate picker, so ticking a different file's checkbox updates both at
+once. Hover any point for the exact frequency/time/dB, same as the other
+views.
+
+Plotly has no native polar heatmap trace, so this reuses the 3D `surface`
+machinery the tool already relies on elsewhere: a perfectly flat disc
+(every point at height 0) with `(x, y)` computed per grid point as
+`(r·cosθ, r·sinθ)` instead of the usual straight-line time/frequency
+coordinates, and colour driven by `surfacecolor` instead of height, with
+flat lighting so it reads as pure colour rather than a shaded 3D object.
+The **View** selector (Heatmap/3D Surface/Waterfall/Mirror) doesn't apply
+here — Visualizer is its own fixed layout, not one more Plot type option.
 
 All signal processing is delegated to the canonical ObieApp Python modules,
 loaded live from GitHub at runtime — none of it is reimplemented here (see
