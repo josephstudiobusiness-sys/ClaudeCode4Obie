@@ -168,34 +168,42 @@ and releases the mic automatically.
 
 ### Visualizer
 
-Toggle **🌀 Visualizer** for a circular take on the same spectrogram data —
-frequency runs **around the circumference, starting at 12 o'clock and
+Toggle **🌀 Visualizer** for a circular take on the same spectrogram data.
+Frequency always runs **around the circumference, starting at 12 o'clock and
 sweeping clockwise** (like a dial) from 0 Hz up to the file's max frequency,
-**time is the radius** (centre = start, edge = end), and colour is dB, same
-as Heatmap. A dotted spoke plus **"0 Hz"**/**"‹max› Hz"** labels mark the
-seam at the top where the sweep starts and wraps back around — they sit
-right next to each other, since 0 Hz and the max frequency are the same
-angular position (a full turn) — and shorter tick marks with compact labels
-(200, 400, 600, 1k, 2k, 3k, 5k, 7k — whichever actually fall under the
-file's max frequency) mark the rest of the way around as a reference scale.
-It shows whichever file Single would show (the topmost sidebar-checked
-one) — there's no separate picker, so ticking a different file's checkbox
-updates both at once. Hover any point for its exact frequency and dB (time
-isn't in the tooltip here — the radius already reads directly off the tick
-marks, so it stayed off to keep the popup short).
+honoring the same **Freq: Lin/Log** toolbar toggle the rest of the tool uses
+— switching it changes the angular spacing here too (on a log scale, 0 Hz
+has no distinct position, same as any log-frequency axis, so it clamps to
+the first real bin). It shows whichever file Single would show (the topmost
+sidebar-checked one) — there's no separate picker, so ticking a different
+file's checkbox updates both at once. A second toolbar button,
+**Visualizer: Disc / Visualizer: Line**, switches between two styles:
 
-Plotly has no native polar heatmap trace, so this reuses the 3D `surface`
-machinery the tool already relies on elsewhere: a disc with `(x, y)`
-computed per grid point as `(r·cosθ, r·sinθ)` instead of the usual
-straight-line time/frequency coordinates, and colour driven by
+- **Disc** — the full time-resolved spectrogram wrapped into a ring: time is
+  the radius (centre = start, edge = end) and colour is dB, same as Heatmap.
+  A dotted spoke plus **"0 Hz"**/**"‹max› Hz"** labels mark the seam at the
+  top where the sweep starts and wraps back around, and full centre-to-edge
+  reference gridlines (not just rim ticks) at 200, 400, 600, 1k, 2k, 3k, 5k,
+  7k Hz (whichever fall under the file's max frequency) let you trace a
+  frequency across the whole disc. Plotly's 3D `surface` hover highlights an
+  entire row/column of the grid rather than a single point — an inherent
+  limitation of that trace type, not something fixable from the data side —
+  so treat the gridlines, not hover, as the precise way to read a frequency
+  off the Disc; the popup that does appear still reports frequency and dB.
+- **Line** — a single radial line: one point per frequency bin, radius is
+  that bin's dB averaged across the whole file. This is a native 2D polar
+  chart (not the 3D surface trick Disc needs), so hover is precise,
+  point-by-point, with no row/column highlighting.
+
+Disc reuses the 3D `surface` machinery the tool already relies on
+elsewhere: `(x, y)` computed per grid point as `(r·cosθ, r·sinθ)` instead of
+the usual straight-line time/frequency coordinates, colour driven by
 `surfacecolor` instead of height, with flat lighting so it reads as pure
-colour rather than a shaded 3D object. The disc isn't perfectly flat,
-though — height carries a small (visually negligible from the top-down
-camera) variation driven by dB, because a truly flat surface is degenerate
-geometry for Plotly's WebGL picker and silently breaks hover; giving it
-genuine (if tiny) relief is what makes hover actually work. The **View**
-selector (Heatmap/3D Surface/Waterfall/Mirror) doesn't apply here —
-Visualizer is its own fixed layout, not one more Plot type option.
+colour rather than a shaded 3D object, and a tightened axis range (hugging
+the disc's actual extent rather than a fixed oversized box) so it fills
+more of the panel. The **View** selector (Heatmap/3D Surface/Waterfall/
+Mirror) doesn't apply here — Visualizer is its own fixed layout, not one
+more Plot type option.
 
 All signal processing is delegated to the canonical ObieApp Python modules,
 loaded live from GitHub at runtime — none of it is reimplemented here (see
