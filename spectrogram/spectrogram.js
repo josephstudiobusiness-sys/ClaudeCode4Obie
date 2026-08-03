@@ -224,7 +224,7 @@ window.onSpecSpectrogramResult = function(slot, channel, times_js, freqs_js, fla
     const shown = _panelIdsForMode();
     if (shown.includes(f.id)) {
       // Redraw every currently-shown panel, not just this one — the shared
-      // intensity range (see _sharedRangeAmong) this update may have shifted.
+      // intensity range (see _globalDbRange) this update may have shifted.
       shown.forEach(renderSpec);
     }
     if (_mode === 'visualizer' && f.id === _singleTargetId()) _renderVisualizer();
@@ -252,25 +252,25 @@ function _dataMinMax(zDb) {
   return { min: lo, max: hi };
 }
 
-// Each shown panel is a separate Plotly figure, so with no explicit range
-// each one auto-scales its heatmap/surface to its OWN min/max — the hottest
-// colour in one panel and the hottest colour in another can end up meaning
-// two different dB values. When 2+ panels are shown at once, share one range
-// (their combined min/max) across all of them, so a given dB reads as the
-// same colour/height everywhere.
-function _sharedRangeAmong(ids) {
-  const caches = ids.map(id => {
-    const f = _getFile(id);
-    return f && (f.showChannel === 'r' ? f.rCache : f.lCache);
-  }).filter(Boolean);
-  if (caches.length < 2) return null;
+// A single dB range spanning every loaded file (not just whichever happens
+// to be currently shown/checked) — with no explicit range each panel would
+// otherwise auto-scale its own heatmap/surface to its OWN min/max, so the
+// hottest colour in one panel and the hottest colour in another could mean
+// two different dB values, and switching which files are checked would
+// shift the scale under you. Computing it across the whole loaded set
+// instead means a given dB always reads as the same colour/height
+// everywhere, and it only moves when a file is actually added or removed —
+// never just from checking/unchecking or switching which one is shown.
+function _globalDbRange() {
   let lo = Infinity, hi = -Infinity;
-  for (const c of caches) {
-    const mm = _dataMinMax(c.zDb);
+  for (const f of _files) {
+    const cache = f.showChannel === 'r' ? f.rCache : f.lCache;
+    if (!cache) continue;
+    const mm = _dataMinMax(cache.zDb);
     if (mm.min < lo) lo = mm.min;
     if (mm.max > hi) hi = mm.max;
   }
-  return { min: lo, max: hi };
+  return Number.isFinite(lo) && Number.isFinite(hi) ? { min: lo, max: hi } : null;
 }
 
 function renderSpec(id) {
@@ -281,7 +281,7 @@ function renderSpec(id) {
   if (!cache || !el) return;
   const label = f.recording ? ' · Live'
     : f.isStereo ? (f.showChannel === 'r' ? ' · R channel' : ' · L channel') : '';
-  _renderGrid(`spec-plot-${id}`, cache, `#${_fileNum(id)} ${f.name}` + label, false, undefined, _sharedRangeAmong(_panelIdsForMode()));
+  _renderGrid(`spec-plot-${id}`, cache, `#${_fileNum(id)} ${f.name}` + label, false, undefined, _globalDbRange());
   renderFrameInfo(id, cache.times, cache.freqs);
 }
 
@@ -927,8 +927,14 @@ function _renderVisualizerDisc(cache, fMax, freqFloor, tickFreqs) {
   // box) so the disc fills more of the panel — Plotly's 3D camera framing
   // is driven by axis range relative to content, not by outerR alone.
   const range = seamLabelR + 0.08;
+  // Fixed across every loaded file (see _globalDbRange) rather than
+  // auto-scaled to whichever file is currently shown — otherwise the same
+  // colour could mean a different dB depending only on which checkbox was
+  // ticked, defeating a fast visual comparison between files.
+  const dbColorRange = _globalDbRange() || dbRange;
   Plotly.react('visualizer-plot', [{
     type: 'surface', x, y, z, surfacecolor: zDb, colorscale, showscale: true,
+    cmin: dbColorRange.min, cmax: dbColorRange.max,
     colorbar: { title: 'dB', titleside: 'right', thickness: 10, tickfont: { size: 9 } },
     customdata,
     hovertemplate: 'Freq: %{customdata:.0f} Hz<br>Level: %{surfacecolor:.1f} dB<extra></extra>',
@@ -952,18 +958,42 @@ function _renderVisualizerDisc(cache, fMax, freqFloor, tickFreqs) {
   }, _pcfg);
 }
 
+// A short centered moving average over the raw per-bin curve — "band"
+// meaning each point gets blended with its nearby neighbours in a small
+// frequency band, not a wide filter — so bin-to-bin noise doesn't dominate
+// the shape, which matters most when eyeballing two files' curves against
+// each other rather than reading one in isolation.
+function _bandSmooth(arr, windowFrac = 0.02) {
+  const n = arr.length;
+  const half = Math.max(1, Math.round(n * windowFrac / 2));
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    let sum = 0, count = 0;
+    for (let j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) { sum += arr[j]; count++; }
+    out[i] = sum / count;
+  }
+  return out;
+}
+
 // Radial line style: one point per frequency bin, radius = that bin's
 // average dB across every time frame (same averaging _renderMirrorByFreq
-// already uses for its population-pyramid view). Uses a real 2D Plotly
-// polar chart (scatterpolar) instead of the 3D surface trick the disc style
-// needs — proper per-point hover (no row/column highlighting), a native
-// log/linear-capable radial axis, and no WebGL picking quirks, since this
-// is a much simpler shape (one line, not a full time-resolved grid).
+// already uses for its population-pyramid view), smoothed with a short
+// band average. Uses a real 2D Plotly polar chart (scatterpolar) instead of
+// the 3D surface trick the disc style needs — proper per-point hover (no
+// row/column highlighting), a native log/linear-capable radial axis, and
+// no WebGL picking quirks, since this is a much simpler shape (one line,
+// not a full time-resolved grid).
 function _renderVisualizerLine(cache, fMax, freqFloor, tickFreqs) {
   const { freqs } = cache;
-  const avgDb = _avgSpectrum(cache);
+  const avgDb = _bandSmooth(_avgSpectrum(cache));
   const theta = freqs.map(fq => 360 * _visualizerFreqFraction(fq, fMax, freqFloor));
   const accent = cssVar('--accent') || '#b35c00';
+  // Fixed across every loaded file (see _globalDbRange), not auto-scaled to
+  // this file's own average — otherwise the ring spacing itself would shift
+  // between files and a genuine level difference could look identical to a
+  // rescaled axis, defeating a fast visual comparison when flipping between
+  // two checked files.
+  const dbRadial = _globalDbRange();
 
   // Both ends of the sweep land on the same angle (0°/360° are the same
   // point), so — unlike the disc style's two offset labels — a single
@@ -987,7 +1017,8 @@ function _renderVisualizerLine(cache, fMax, freqFloor, tickFreqs) {
     paper_bgcolor: '#fff',
     polar: {
       bgcolor: '#fff',
-      radialaxis: { title: 'dB', tickfont: { size: 9 } },
+      radialaxis: { title: 'dB', tickfont: { size: 9 },
+        range: dbRadial ? [dbRadial.min, dbRadial.max] : undefined },
       angularaxis: {
         rotation: 90, direction: 'clockwise', range: [0, 360],
         tickvals: tickVals, ticktext: tickText, tickfont: { size: 9 },

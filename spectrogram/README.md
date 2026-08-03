@@ -59,12 +59,16 @@ a quick how-to-use popup.
 Every currently-shown panel is its own Plotly figure, so left to their
 defaults they'd colour-scale independently — the hottest colour in one
 panel could mean a completely different dB than the hottest colour in
-another. To keep them genuinely comparable, whenever 2+ panels are shown at
-once (Compare rows, or either side of Mirror-by-time), Heatmap and 3D
-Surface (colour *and* height) share one intensity range — the combined
-min/max across all of them — instead of each auto-scaling to its own data.
-The Difference view's own colour range (zero-centred on ΔdB) is unaffected
-— that's a separate, already-shared computation.
+another. To keep them genuinely comparable, Single/Compare's Heatmap and 3D
+Surface (colour *and* height) always share one fixed intensity range — the
+combined min/max across *every loaded file*, not just whichever happen to
+be currently checked or shown — instead of each auto-scaling to its own
+data. That range only moves when a file is actually loaded or removed, so
+checking/unchecking files, or going from several panels down to one, never
+shifts the scale under you. Either side of Mirror-by-time separately shares
+its own combined min/max between just that pair. The Difference view's own
+colour range (zero-centred on ΔdB) is unaffected — that's a separate,
+already-shared computation.
 
 ### Frequency smoothing
 
@@ -191,8 +195,10 @@ file's checkbox updates both at once. A second toolbar button,
   so treat the gridlines, not hover, as the precise way to read a frequency
   off the Disc; the popup that does appear still reports frequency and dB.
 - **Line** — a single radial line: one point per frequency bin, radius is
-  that bin's dB averaged across the whole file. This is a native 2D polar
-  chart (not the 3D surface trick Disc needs), so hover is precise,
+  that bin's dB averaged across the whole file, then run through a short
+  band-average (each point blended with its near neighbours) to smooth out
+  bin-to-bin noise so the overall shape reads clearly. This is a native 2D
+  polar chart (not the 3D surface trick Disc needs), so hover is precise,
   point-by-point, with no row/column highlighting.
 
 Disc reuses the 3D `surface` machinery the tool already relies on
@@ -204,6 +210,20 @@ the disc's actual extent rather than a fixed oversized box) so it fills
 more of the panel. The **View** selector (Heatmap/3D Surface/Waterfall/
 Mirror) doesn't apply here — Visualizer is its own fixed layout, not one
 more Plot type option.
+
+Both styles' dB scale — Disc's colour range and Line's radial-axis range —
+is fixed across every loaded file rather than auto-scaled to whichever one
+is currently shown. Without that, the same colour or the same ring could
+mean a different dB depending only on which file's checkbox happened to be
+ticked, which would defeat a fast side-by-side comparison; checking a
+different file re-shows the plot at the exact same scale, so a genuine
+level difference actually looks different instead of both files getting
+independently stretched to fill the same visual range. The scale only
+moves when a file is actually loaded or removed, never from switching or
+checking/unchecking which one is displayed. Compare mode's Heatmap/3D
+Surface panels share this same fixed, whole-library dB range for the same
+reason — every panel (and a lone panel left after unchecking others) reads
+off one constant scale rather than each auto-normalizing to its own data.
 
 All signal processing is delegated to the canonical ObieApp Python modules,
 loaded live from GitHub at runtime — none of it is reimplemented here (see
