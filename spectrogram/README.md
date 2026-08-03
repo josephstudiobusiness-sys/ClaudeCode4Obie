@@ -169,9 +169,12 @@ and releases the mic automatically.
 ### Visualizer
 
 Toggle **🌀 Visualizer** for a circular take on the same spectrogram data —
-frequency runs **around the circumference** (0 Hz at the top, sweeping a
-full turn up to the file's max frequency), **time is the radius** (centre =
-start, edge = end), and colour is dB, same as Heatmap. It shows whichever
+frequency runs **around the circumference** (sweeping a full turn from 0 Hz
+up to the file's max frequency), **time is the radius** (centre = start,
+edge = end), and colour is dB, same as Heatmap. A dotted spoke plus **"0
+Hz"**/**"‹max› Hz"** labels mark the seam where the sweep starts and wraps
+back around — they sit right next to each other, since 0 Hz and the max
+frequency are the same angular position (a full turn). It shows whichever
 file Single would show (the topmost sidebar-checked one) — there's no
 separate picker, so ticking a different file's checkbox updates both at
 once. Hover any point for the exact frequency/time/dB, same as the other
