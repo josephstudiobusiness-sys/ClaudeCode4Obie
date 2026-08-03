@@ -812,7 +812,7 @@ function _renderVisualizer() {
       xRow.push(r * Math.cos(theta));
       yRow.push(r * Math.sin(theta));
       zRow.push(Z_SCALE * (zDb[i][j] - dbRange.min) / dbSpan);
-      cdRow.push([freqs[i], times[j]]);
+      cdRow.push(freqs[i]);   // hover only needs frequency — see hovertemplate below
     }
     x.push(xRow); y.push(yRow); z.push(zRow); customdata.push(cdRow);
   }
@@ -856,10 +856,16 @@ function _renderVisualizer() {
   const tickFont = { size: 9, family: 'Arial, sans-serif', color: muted };
   const freqTickLabel = fq => fq >= 1000 ? `${fq / 1000}k` : `${fq}`;
 
+  // thetaOf() DECREASES as frequency increases (clockwise sweep), so the
+  // label sitting on the low-frequency side of the seam needs the smaller
+  // offset angle (minus eps) and the high-frequency side needs the larger
+  // one (plus eps) — swapped from that, each label ends up next to the
+  // wrong end of the actual data sweep even though the sweep itself is
+  // correctly clockwise.
   const annotations = [
-    { x: seamLabelR * Math.cos(thetaOf(0) + eps), y: seamLabelR * Math.sin(thetaOf(0) + eps), z: 0,
-      text: '0 Hz', showarrow: false, font: seamFont },
     { x: seamLabelR * Math.cos(thetaOf(0) - eps), y: seamLabelR * Math.sin(thetaOf(0) - eps), z: 0,
+      text: '0 Hz', showarrow: false, font: seamFont },
+    { x: seamLabelR * Math.cos(thetaOf(0) + eps), y: seamLabelR * Math.sin(thetaOf(0) + eps), z: 0,
       text: `${fMax.toFixed(0)} Hz`, showarrow: false, font: seamFont },
     ...tickFreqs.map(fq => {
       const th = thetaOf(fq);
@@ -873,7 +879,7 @@ function _renderVisualizer() {
     type: 'surface', x, y, z, surfacecolor: zDb, colorscale, showscale: true,
     colorbar: { title: 'dB', titleside: 'right', thickness: 10, tickfont: { size: 9 } },
     customdata,
-    hovertemplate: 'Freq: %{customdata[0]:.0f} Hz<br>Time: %{customdata[1]:.3f} s<br>Level: %{surfacecolor:.1f} dB<extra></extra>',
+    hovertemplate: 'Freq: %{customdata:.0f} Hz<br>Level: %{surfacecolor:.1f} dB<extra></extra>',
     lighting: { ambient: 1, diffuse: 0, specular: 0 },   // flat colour, no 3D shading on the disc
   }, seamSpoke, tickMarks], {
     title: {

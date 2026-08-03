@@ -180,8 +180,9 @@ angular position (a full turn) — and shorter tick marks with compact labels
 file's max frequency) mark the rest of the way around as a reference scale.
 It shows whichever file Single would show (the topmost sidebar-checked
 one) — there's no separate picker, so ticking a different file's checkbox
-updates both at once. Hover any point for the exact frequency/time/dB, same
-as the other views.
+updates both at once. Hover any point for its exact frequency and dB (time
+isn't in the tooltip here — the radius already reads directly off the tick
+marks, so it stayed off to keep the popup short).
 
 Plotly has no native polar heatmap trace, so this reuses the 3D `surface`
 machinery the tool already relies on elsewhere: a disc with `(x, y)`
