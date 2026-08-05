@@ -592,10 +592,13 @@ window.specToggleMirror3D = function() {
   if (_mode === 'diff') _renderMirror('diff-plot', _diffTitle());
 };
 
+const VISUALIZER_STYLES = ['disc', 'line', 'eq'];
+const VISUALIZER_STYLE_LABELS = { disc: 'Visualizer: Disc', line: 'Visualizer: Line', eq: 'Visualizer: Equalizer' };
+
 window.specToggleVisualizerStyle = function() {
-  _visualizerStyle = _visualizerStyle === 'disc' ? 'line' : 'disc';
-  document.getElementById('visualizer-style-btn').textContent =
-    _visualizerStyle === 'line' ? 'Visualizer: Line' : 'Visualizer: Disc';
+  const i = VISUALIZER_STYLES.indexOf(_visualizerStyle);
+  _visualizerStyle = VISUALIZER_STYLES[(i + 1) % VISUALIZER_STYLES.length];
+  document.getElementById('visualizer-style-btn').textContent = VISUALIZER_STYLE_LABELS[_visualizerStyle];
   if (_mode === 'visualizer') _renderVisualizer();
 };
 
@@ -780,7 +783,7 @@ function _refreshCurrentView() {
 // point instead of the usual straight-line time/frequency coordinates, and
 // colour driven by surfacecolor instead of height. Flat lighting keeps the
 // disc reading as pure colour rather than a shaded 3D object.
-let _visualizerStyle = 'disc';   // 'disc' | 'line'
+let _visualizerStyle = 'disc';   // 'disc' | 'line' | 'eq'
 
 // Fraction (0..1) of the way around the circle a frequency sits at, honoring
 // the shared Freq: Lin/Log toolbar toggle — shared by both Visualizer
@@ -817,6 +820,7 @@ function _renderVisualizer() {
   const tickFreqs = [200, 400, 600, 1000, 2000, 3000, 5000, 7000].filter(fq => fq > freqFloor && fq < fMax * 0.97);
 
   if (_visualizerStyle === 'line') _renderVisualizerLine(cache, fMax, freqFloor, tickFreqs);
+  else if (_visualizerStyle === 'eq') _renderVisualizerEQ(cache, fMax, freqFloor, tickFreqs);
   else _renderVisualizerDisc(cache, fMax, freqFloor, tickFreqs);
 }
 
@@ -1015,6 +1019,102 @@ function _renderVisualizerLine(cache, fMax, freqFloor, tickFreqs) {
     },
     font: { size: 10, family: 'inherit' },
     paper_bgcolor: '#fff',
+    polar: {
+      bgcolor: '#fff',
+      radialaxis: { title: 'dB', tickfont: { size: 9 },
+        range: dbRadial ? [dbRadial.min, dbRadial.max] : undefined },
+      angularaxis: {
+        rotation: 90, direction: 'clockwise', range: [0, 360],
+        tickvals: tickVals, ticktext: tickText, tickfont: { size: 9 },
+      },
+    },
+    margin: { l: 50, r: 50, t: 40, b: 40 },
+  }, _pcfg);
+}
+
+const N_EQ_BANDS = 24;
+
+// Band edges (in Hz) spanning freqFloor..fMax, evenly spaced in whichever
+// domain the Freq: Lin/Log toggle is currently using — evenly spaced in log
+// space on Log (so bands read like a real octave-style equalizer, narrower
+// at the low end) or evenly spaced in Hz on Linear — so each band ends up
+// the same angular width once mapped through _visualizerFreqFraction.
+function _eqBandEdges(fMax, freqFloor, n) {
+  const edges = new Array(n + 1);
+  if (_logFreq) {
+    const lo = Math.log(Math.max(freqFloor, 1e-9)), hi = Math.log(Math.max(fMax, freqFloor * 1.0001));
+    for (let i = 0; i <= n; i++) edges[i] = Math.exp(lo + (hi - lo) * i / n);
+  } else {
+    for (let i = 0; i <= n; i++) edges[i] = freqFloor + (fMax - freqFloor) * i / n;
+  }
+  return edges;
+}
+
+// Equalizer style: the spectrum bucketed into a fixed number of bands, each
+// drawn as a radial bar — the classic hardware-EQ look, mapped onto the
+// same clockwise-from-12-o'clock frequency sweep the other two styles use.
+// A native Plotly 'barpolar' trace does the actual bar geometry (no manual
+// (x,y) trick needed here, unlike Disc), with each bar's base pinned to the
+// fixed global dB floor (see _globalDbRange) and its far edge at that
+// band's own average level, so bar height reads directly as loudness on a
+// scale that stays put when switching files.
+function _renderVisualizerEQ(cache, fMax, freqFloor, tickFreqs) {
+  const { freqs } = cache;
+  const avgDb = _avgSpectrum(cache);
+  const edges = _eqBandEdges(fMax, freqFloor, N_EQ_BANDS);
+
+  const bandFreq = [], bandDb = [], theta = [], width = [];
+  for (let i = 0; i < N_EQ_BANDS; i++) {
+    const lo = edges[i], hi = edges[i + 1];
+    const center = _logFreq ? Math.sqrt(lo * hi) : (lo + hi) / 2;
+    let sum = 0, count = 0;
+    for (let k = 0; k < freqs.length; k++) if (freqs[k] >= lo && freqs[k] < hi) { sum += avgDb[k]; count++; }
+    let db;
+    if (count) {
+      db = sum / count;
+    } else {
+      // No bin landed inside this band — possible for the narrowest bands
+      // when the band grid is finer than the FFT's own frequency
+      // resolution, mostly at the low end on a log scale. Fall back to
+      // whichever single bin sits closest to the band's centre.
+      let bestK = 0, bestD = Infinity;
+      for (let k = 0; k < freqs.length; k++) { const d = Math.abs(freqs[k] - center); if (d < bestD) { bestD = d; bestK = k; } }
+      db = avgDb[bestK];
+    }
+    bandFreq.push(center);
+    bandDb.push(db);
+    theta.push(360 * _visualizerFreqFraction(center, fMax, freqFloor));
+    // A fraction of the band's true angular width, so a thin gap separates
+    // neighbouring bars like real EQ LEDs/faders rather than a solid ring.
+    const fracLo = _visualizerFreqFraction(lo, fMax, freqFloor), fracHi = _visualizerFreqFraction(hi, fMax, freqFloor);
+    width.push(Math.abs(fracHi - fracLo) * 360 * 0.85);
+  }
+
+  const dbRadial = _globalDbRange();
+  const colorscale = document.getElementById('colorscale-sel').value;
+
+  const tickVals = [0, ...tickFreqs.map(fq => 360 * _visualizerFreqFraction(fq, fMax, freqFloor))];
+  const tickText = [`0 / ${fMax.toFixed(0)} Hz`, ...tickFreqs.map(fq => fq >= 1000 ? `${fq / 1000}k` : `${fq}`)];
+
+  Plotly.react('visualizer-plot', [{
+    type: 'barpolar', r: bandDb, theta, width,
+    base: dbRadial ? dbRadial.min : undefined,
+    marker: {
+      color: bandDb, colorscale,
+      cmin: dbRadial ? dbRadial.min : undefined, cmax: dbRadial ? dbRadial.max : undefined,
+      showscale: true, colorbar: { title: 'dB', titleside: 'right', thickness: 10, tickfont: { size: 9 } },
+      line: { width: 0 },
+    },
+    customdata: bandFreq,
+    hovertemplate: 'Freq: %{customdata:.0f} Hz<br>Level: %{r:.1f} dB<extra></extra>',
+  }], {
+    title: {
+      text: `Equalizer — ${N_EQ_BANDS} bands around the circumference (0–${fMax.toFixed(0)} Hz, ${_logFreq ? 'log' : 'linear'}), bar height is band-averaged dB`,
+      font: { size: 11 }, pad: { t: 2, b: 0 },
+    },
+    font: { size: 10, family: 'inherit' },
+    paper_bgcolor: '#fff',
+    showlegend: false,
     polar: {
       bgcolor: '#fff',
       radialaxis: { title: 'dB', tickfont: { size: 9 },

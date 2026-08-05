@@ -180,8 +180,9 @@ honoring the same **Freq: Lin/Log** toolbar toggle the rest of the tool uses
 has no distinct position, same as any log-frequency axis, so it clamps to
 the first real bin). It shows whichever file Single would show (the topmost
 sidebar-checked one) — there's no separate picker, so ticking a different
-file's checkbox updates both at once. A second toolbar button,
-**Visualizer: Disc / Visualizer: Line**, switches between two styles:
+file's checkbox updates both at once. A second toolbar button cycles
+**Visualizer: Disc → Visualizer: Line → Visualizer: Equalizer** through
+three styles:
 
 - **Disc** — the full time-resolved spectrogram wrapped into a ring: time is
   the radius (centre = start, edge = end) and colour is dB, same as Heatmap.
@@ -200,6 +201,16 @@ file's checkbox updates both at once. A second toolbar button,
   bin-to-bin noise so the overall shape reads clearly. This is a native 2D
   polar chart (not the 3D surface trick Disc needs), so hover is precise,
   point-by-point, with no row/column highlighting.
+- **Equalizer** — the classic hardware-EQ look: the spectrum bucketed into
+  24 bands around the same clockwise dial, each drawn as a radial bar whose
+  height is that band's average dB and whose colour also tracks level
+  (via the selected colorscale), so louder bands both stand taller and
+  read hotter. Bands are spaced evenly in whichever domain Freq: Lin/Log is
+  currently using — even in Hz on Linear, even in octaves on Log (narrower
+  bands at the low end, like a real graphic equalizer) — with a small gap
+  between bars so they read as discrete LEDs/faders rather than a solid
+  ring. Built on a native Plotly `barpolar` trace, so — like Line — hover
+  is precise and per-bar, not the Disc's row/column highlighting.
 
 Disc reuses the 3D `surface` machinery the tool already relies on
 elsewhere: `(x, y)` computed per grid point as `(r·cosθ, r·sinθ)` instead of
@@ -211,10 +222,11 @@ more of the panel. The **View** selector (Heatmap/3D Surface/Waterfall/
 Mirror) doesn't apply here — Visualizer is its own fixed layout, not one
 more Plot type option.
 
-Both styles' dB scale — Disc's colour range and Line's radial-axis range —
-is fixed across every loaded file rather than auto-scaled to whichever one
-is currently shown. Without that, the same colour or the same ring could
-mean a different dB depending only on which file's checkbox happened to be
+All three styles' dB scale — Disc's colour range, Line's radial-axis range,
+and Equalizer's radial-axis range plus bar-colour range — is fixed across
+every loaded file rather than auto-scaled to whichever one is currently
+shown. Without that, the same colour, ring, or bar height could mean a
+different dB depending only on which file's checkbox happened to be
 ticked, which would defeat a fast side-by-side comparison; checking a
 different file re-shows the plot at the exact same scale, so a genuine
 level difference actually looks different instead of both files getting
