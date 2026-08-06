@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="./coi-serviceworker.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Visualizer — ObieWebApp</title>
+
+  <link rel="stylesheet" href="./css/theme.css">
+  <link rel="stylesheet" href="./visualizer.css">
+
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js" crossorigin="anonymous"></script>
+
+  <!-- PyScript 2026.3.1 -->
+  <link  rel="stylesheet" href="https://pyscript.net/releases/2026.3.1/core.css">
+  <script type="module"   src="https://pyscript.net/releases/2026.3.1/core.js"></script>
+
+  <!-- Shared JS — order matters -->
+  <script src="./js/plotly-theme.js"></script>
+  <script src="./js/audio.js"></script>
+  <script src="./js/browser-check.js"></script>       <!-- Chrome check -->
+  <script src="./visualizer.js" defer></script>
+</head>
+<body>
+
+<div id="loading" class="loading-overlay">
+  <div class="spin"></div>
+  <div class="load-title">Loading PyScript + NumPy…</div>
+  <div class="load-sub">First load may take 15–30 s</div>
+</div>
+
+<div class="vz-page">
+
+  <!-- ── Header ──────────────────────────────────────────────────────── -->
+  <header class="obie-header">
+    <span class="brand">
+      <div class="logo-icon">🎻</div>
+      <h1>ObieWebApp</h1>
+    </span>
+    <span class="crumb">· Visualizer</span>
+    <div class="gap"></div>
+    <button class="tb-btn" onclick="vzHelp()">Help</button>
+  </header>
+
+  <!-- ── Toolbar ─────────────────────────────────────────────────────── -->
+  <div class="vz-toolbar">
+    <div class="tb-group">
+      <button id="view-planar-btn" class="tb-btn active" onclick="vzSetView('planar')" title="Flat time/frequency grid, colour = level">▦ Planar</button>
+      <button id="view-radial-btn" class="tb-btn" onclick="vzSetView('radial')" title="Frequency around the circumference, time as radius, colour = level">🌀 Radial</button>
+      <button id="view-surface-btn" class="tb-btn" onclick="vzSetView('surface')" title="Time/frequency grid with level as real 3D height">⛰ 3D Surface</button>
+    </div>
+    <div class="tb-flex"></div>
+    <select id="colorscale-sel" class="tb-btn" onchange="vzRender()" title="Difference in colour — colour scale used across every view">
+      <option value="Plasma" selected>Plasma</option>
+      <option value="Viridis">Viridis</option>
+      <option value="Inferno">Inferno</option>
+      <option value="Jet">Jet</option>
+      <option value="Greys">Greyscale</option>
+      <option value="RdBu">RdBu</option>
+      <option value="Turbo">Turbo</option>
+      <option value="Hot">Hot</option>
+    </select>
+    <button id="freq-scale-btn" class="tb-btn" onclick="vzToggleFreqScale()"
+            title="Toggle frequency axis between linear and log">Freq: Lin</button>
+    <button class="tb-btn" onclick="vzPreferences()" title="FFT window/hop/max-freq, smoothing">⚙️ FFT Settings</button>
+    <button class="tb-btn" onclick="vzShowInfo()" title="How to use this tool">ℹ</button>
+  </div>
+
+  <!-- ── Main body: sidebar + resizer + plot area ─────────────────────── -->
+  <div class="vz-body">
+
+    <!-- Left: loaded-file list (Explore/Spectrogram-style) -->
+    <div class="vz-sidebar">
+      <div class="vz-sidebar-toolbar">
+        <label class="file-btn" id="file-btn-label" style="width:auto"
+               title="WAV/MP3 (audio) or TRF/TRV/AvC/AvR/CSV/MAT (FRF — IFFT'd to an impulse response). Pick multiple files at once if you like.">
+          <span>📂 Load</span>
+          <input type="file" id="file-input" multiple
+                 accept=".wav,.mp3,.trf,.trv,.avc,.avr,.csv,.mat,audio/wav,audio/mpeg,audio/*"
+                 onchange="loadFiles(this)">
+        </label>
+      </div>
+      <div id="file-list" class="vz-file-list"></div>
+    </div><!-- vz-sidebar -->
+
+    <!-- Drag handle -->
+    <div id="vz-resizer" class="vz-resizer"></div>
+
+    <!-- Right: the active view -->
+    <div class="vz-view">
+      <div class="vz-panel-toolbar">
+        <span class="vz-panel-title" id="active-title">Visualizer</span>
+        <div class="tb-flex"></div>
+        <span class="vz-panel-status" id="active-status">Tick a file’s checkbox in the sidebar to see it here</span>
+      </div>
+      <div class="vz-plot-row" style="flex:1">
+        <div id="viz-plot" class="plot-div"></div>
+      </div>
+      <div class="vz-panel-frameinfo" id="frame-info">–</div>
+    </div>
+
+  </div><!-- vz-body -->
+
+  <!-- ── Footer ──────────────────────────────────────────────────────── -->
+  <footer class="vz-footer">
+    Signal processing powered by <a href="https://github.com/chrisbuerginrogers/ObieApp" target="_blank" rel="noopener">ObieWebApp</a>
+  </footer>
+
+</div><!-- vz-page -->
+
+<!-- ── FFT Settings modal ────────────────────────────────────────────── -->
+<div id="prefs-modal" class="modal-overlay">
+  <div class="modal-box" style="width:min(92vw,340px)">
+    <div class="modal-header">
+      <span class="modal-title">⚙️ FFT Settings</span>
+      <button class="modal-close" onclick="vzClosePrefs()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="vz-row">
+        <label for="n-fft-sel">Window size</label>
+        <select id="n-fft-sel" onchange="vzSettingsChanged()">
+          <option value="512">512</option>
+          <option value="1024">1024</option>
+          <option value="2048" selected>2048</option>
+          <option value="4096">4096</option>
+          <option value="8192">8192</option>
+        </select>
+      </div>
+      <div class="vz-row">
+        <label for="hop-sel">Hop size</label>
+        <select id="hop-sel" onchange="vzSettingsChanged()">
+          <option value="128">128</option>
+          <option value="256">256</option>
+          <option value="512" selected>512</option>
+          <option value="1024">1024</option>
+          <option value="2048">2048</option>
+        </select>
+      </div>
+      <div class="vz-row">
+        <label for="fmax-inp">Max freq</label>
+        <input id="fmax-inp" type="number" value="8000" min="500" max="24000" step="500" onchange="vzSettingsChanged()">
+        <span class="vz-unit">Hz</span>
+      </div>
+      <div class="vz-row">
+        <label for="semitone-sel">Smoothing</label>
+        <select id="semitone-sel" onchange="vzSettingsChanged()">
+          <option value="0" selected>No smoothing</option>
+          <option value="0.25">¼ semitone</option>
+          <option value="0.5">½ semitone</option>
+          <option value="1">1 semitone</option>
+          <option value="2">2 semitones</option>
+          <option value="3">3 semitones</option>
+          <option value="4">4 semitones</option>
+          <option value="12">Octave</option>
+        </select>
+      </div>
+      <p class="vz-hint">Higher window size = finer frequency resolution, coarser time resolution.</p>
+      <div class="save-row">
+        <button class="act-btn accent" onclick="vzSavePrefs()">Save</button>
+        <button class="act-btn" onclick="vzResetPrefs()">Reset defaults</button>
+        <span id="prefs-save-msg" class="save-msg"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Info modal ─────────────────────────────────────────────────────── -->
+<div id="info-modal" class="modal-overlay">
+  <div class="modal-box" style="width:min(92vw,420px)">
+    <div class="modal-header">
+      <span class="modal-title">ℹ How to use this tool</span>
+      <button class="modal-close" onclick="vzCloseInfo()">✕</button>
+    </div>
+    <div class="modal-body vz-info-body">
+      <p>Load a file (WAV, MP3, or FRF: TRF/TRV/AvC/AvR/CSV/MAT) — each becomes a numbered row in the sidebar list. Tick a row’s checkbox to make it the active file; ticking a different row switches the view.</p>
+      <p><strong>▦ Planar</strong> — the classic flat spectrogram: time × frequency grid, colour = level.</p>
+      <p><strong>🌀 Radial</strong> — the same data wrapped into a circle: frequency around the circumference (0 Hz at 12 o’clock, sweeping clockwise), time as the radius, colour = level.</p>
+      <p><strong>⛰ 3D Surface</strong> — time × frequency grid with level as real, rotatable 3D height instead of colour alone.</p>
+      <p>The colour-scale picker (top right) applies to all three views — pick whichever reads best for the material.</p>
+      <p>⚙️ FFT Settings (window/hop/max-freq/smoothing) apply to whichever file is active.</p>
+    </div>
+  </div>
+</div>
+
+<script type="py" src="./main.py" config="./pyscript.toml" async></script>
+</body>
+</html>
