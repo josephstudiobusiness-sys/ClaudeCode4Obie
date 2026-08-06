@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ObieWebApp</title>
+  <style>
+    :root {
+      --bg:        #f3e7d3;
+      --bg-deep:   #e8d8be;
+      --surface:   #fbf3e3;
+      --border:    #c9b48f;
+      --text:      #3a2e1d;
+      --muted:     #7a6749;
+      --accent:    #b35c00;
+      --accent-2:  #ff6f00;
+      --shadow:    0 1px 3px rgba(80, 50, 10, 0.08);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      line-height: 1.5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header.obie-header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 18px 28px;
+      background: var(--bg-deep);
+      border-bottom: 1px solid var(--border);
+    }
+    header.obie-header .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text);
+    }
+    header.obie-header .logo-icon {
+      width: 38px; height: 38px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      border-radius: 9px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+    }
+    header.obie-header h1 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+    }
+
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+      gap: 10px;
+    }
+    main .intro {
+      text-align: center;
+      max-width: 480px;
+      margin-bottom: 28px;
+    }
+    main .intro h2 {
+      font-size: 1.4rem;
+      margin-bottom: 8px;
+    }
+    main .intro p {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .tool-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 22px;
+      justify-content: center;
+      max-width: 780px;
+    }
+    a.tool-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 10px;
+      width: 320px;
+      padding: 32px 26px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      text-decoration: none;
+      color: var(--text);
+      transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+    }
+    a.tool-card:hover {
+      transform: translateY(-3px);
+      border-color: var(--accent);
+      box-shadow: 0 6px 16px rgba(80, 50, 10, 0.14);
+    }
+    a.tool-card .tool-icon {
+      width: 56px; height: 56px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      border-radius: 14px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 28px;
+      margin-bottom: 4px;
+    }
+    a.tool-card h3 {
+      font-size: 1.15rem;
+      font-weight: 700;
+    }
+    a.tool-card p {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    a.tool-card .go {
+      margin-top: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    footer.obie-footer {
+      text-align: center;
+      padding: 16px;
+      font-size: 0.8rem;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+    }
+    footer.obie-footer a { color: var(--accent); }
+  </style>
+</head>
+<body>
+
+  <header class="obie-header">
+    <span class="brand">
+      <div class="logo-icon">🎻</div>
+      <h1>ObieWebApp</h1>
+    </span>
+  </header>
+
+  <main>
+    <div class="intro">
+      <h2>Violin acoustics toolkit</h2>
+      <p>Browser-based tools for looking at how an instrument actually sounds — pick one to get started.</p>
+    </div>
+
+    <div class="tool-grid">
+      <a class="tool-card" href="./spectrogram/">
+        <div class="tool-icon">📊</div>
+        <h3>Spectrogram</h3>
+        <p>Heatmap/3D/Waterfall spectrograms — Single, Compare, Difference, and Live mic views.</p>
+        <span class="go">Open Spectrogram →</span>
+      </a>
+
+      <a class="tool-card" href="./visualizer/">
+        <div class="tool-icon">🌀</div>
+        <h3>Visualizer</h3>
+        <p>Planar, Radial, and 3D Surface views of a single recording's time/frequency grid.</p>
+        <span class="go">Open Visualizer →</span>
+      </a>
+    </div>
+  </main>
+
+  <footer class="obie-footer">
+    Signal processing powered by <a href="https://github.com/chrisbuerginrogers/ObieApp" target="_blank" rel="noopener">ObieWebApp</a>
+  </footer>
+
+</body>
+</html>
