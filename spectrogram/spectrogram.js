@@ -78,7 +78,6 @@ let _logFreq = false;
 
 Plotly.newPlot('diff-plot', [], _wl('Difference: ① − ②', 'Time (s)', 'Frequency (Hz)'), _pcfg);
 Plotly.newPlot('live-plot', [], _wl('Live Spectrogram', 'Time (s)', 'Frequency (Hz)'), _pcfg);
-Plotly.newPlot('visualizer-plot', [], _wl('Circular Spectrogram', '', '', {}), _pcfg);
 
 // ── File loading (WAV, MP3, or FRF files IFFT'd to an impulse response) ──
 // WAV bytes go straight to Python (scipy reads the format directly). MP3 —
@@ -227,7 +226,6 @@ window.onSpecSpectrogramResult = function(slot, channel, times_js, freqs_js, fla
       // intensity range (see _globalDbRange) this update may have shifted.
       shown.forEach(renderSpec);
     }
-    if (_mode === 'visualizer' && f.id === _singleTargetId()) _renderVisualizer();
   }
 };
 
@@ -592,21 +590,6 @@ window.specToggleMirror3D = function() {
   if (_mode === 'diff') _renderMirror('diff-plot', _diffTitle());
 };
 
-const VISUALIZER_STYLES = ['disc', 'line', 'eq'];
-const VISUALIZER_STYLE_LABELS = { disc: 'Visualizer: Disc', line: 'Visualizer: Line', eq: 'Visualizer: Equalizer' };
-
-window.specToggleVisualizerStyle = function() {
-  const i = VISUALIZER_STYLES.indexOf(_visualizerStyle);
-  _visualizerStyle = VISUALIZER_STYLES[(i + 1) % VISUALIZER_STYLES.length];
-  document.getElementById('visualizer-style-btn').textContent = VISUALIZER_STYLE_LABELS[_visualizerStyle];
-  if (_mode === 'visualizer') _renderVisualizer();
-};
-
-function _updateVisualizerStyleBtn() {
-  const btn = document.getElementById('visualizer-style-btn');
-  btn.style.display = _mode === 'visualizer' ? '' : 'none';
-}
-
 // The mirror-axis toggle only makes sense in flat Mirror mode — 3D doesn't
 // need it (overlapping surfaces + rotation separate ① and ② without having
 // to pick which axis to mirror on).
@@ -697,7 +680,6 @@ function specSettingsChanged() {
 
 function specRenderAll() {
   _panelIdsForMode().forEach(renderSpec);
-  if (_mode === 'visualizer') _renderVisualizer();
   if (_mode !== 'diff') return;
   if (document.getElementById('view-mode-sel').value === 'mirror') {
     _renderMirror('diff-plot', _diffTitle());
@@ -713,7 +695,6 @@ window.specToggleChannel = function(id) {
   _renderFileList();
   const shown = _panelIdsForMode();
   if (shown.includes(id)) shown.forEach(renderSpec);
-  if (_mode === 'visualizer' && id === _singleTargetId()) _renderVisualizer();
 };
 
 window.specToggleFreqScale = function() {
@@ -762,370 +743,12 @@ function _rebuildComparePanels() {
   });
 }
 
-// Refreshes whichever of Single/Compare/Visualizer is on screen — the one
-// thing all three call sites (a file loading, a checkbox changing, a file
-// being removed, a settings change) actually need, so they can call this
-// one function instead of remembering all three modes individually.
+// Refreshes whichever of Single/Compare is on screen — the one thing all
+// three call sites (a file loading, a checkbox changing, a file being
+// removed, a settings change) actually need, so they can call this one
+// function instead of remembering both modes individually.
 function _refreshCurrentView() {
   if (_mode === 'single' || _mode === 'compare') _rebuildComparePanels();
-  else if (_mode === 'visualizer') _renderVisualizer();
-}
-
-// ── Visualizer: circular spectrogram ────────────────────────────────────
-// Frequency runs around the circumference (0 Hz at angle 0, sweeping a full
-// turn up to the file's max frequency); time is the radius (centre = start,
-// edge = end); colour is dB, same as Heatmap. Shows whichever file Single
-// would show (the topmost sidebar-checked one) — no separate picker.
-//
-// Plotly has no native polar heatmap, so this reuses the 3D 'surface' trace
-// machinery already used elsewhere in the file: a perfectly flat disc
-// (z=0 everywhere) with manually-computed (x,y) = (r·cosθ, r·sinθ) per grid
-// point instead of the usual straight-line time/frequency coordinates, and
-// colour driven by surfacecolor instead of height. Flat lighting keeps the
-// disc reading as pure colour rather than a shaded 3D object.
-let _visualizerStyle = 'disc';   // 'disc' | 'line' | 'eq'
-
-// Fraction (0..1) of the way around the circle a frequency sits at, honoring
-// the shared Freq: Lin/Log toolbar toggle — shared by both Visualizer
-// styles so switching Lin/Log affects them identically. log(0) is
-// undefined, so — same as every other log-frequency axis in this tool —
-// 0 Hz isn't a distinct point on a log scale; it clamps to wherever the
-// first real (positive) bin sits, same as a normal log-frequency plot does.
-function _visualizerFreqFraction(freq, fMax, freqFloor) {
-  if (!_logFreq) return fMax ? freq / fMax : 0;
-  const lo = Math.log(Math.max(freqFloor, 1e-9));
-  const hi = Math.log(Math.max(fMax, freqFloor * 1.0001));
-  if (hi <= lo) return 0;
-  const f = Math.max(freq, freqFloor);
-  return Math.min(1, Math.max(0, (Math.log(f) - lo) / (hi - lo)));
-}
-
-function _renderVisualizer() {
-  const id = _singleTargetId();
-  const f = id != null ? _getFile(id) : null;
-  const cache = f && (f.showChannel === 'r' ? f.rCache : f.lCache);
-  const statusEl = document.getElementById('visualizer-status');
-  if (!cache) {
-    statusEl.textContent = 'Tick a file’s checkbox in the sidebar to see it here';
-    statusEl.className = 'sp-panel-status';
-    Plotly.react('visualizer-plot', [], _wl('Circular Spectrogram', '', '', {}), _pcfg);
-    return;
-  }
-  statusEl.textContent = `#${_fileNum(id)} ${f.name}`;
-  statusEl.className = 'sp-panel-status ok';
-
-  const { freqs } = cache;
-  const fMax = freqs[freqs.length - 1] || 1;
-  const freqFloor = freqs.find(fq => fq > 0) || fMax * 0.001;
-  const tickFreqs = [200, 400, 600, 1000, 2000, 3000, 5000, 7000].filter(fq => fq > freqFloor && fq < fMax * 0.97);
-
-  if (_visualizerStyle === 'line') _renderVisualizerLine(cache, fMax, freqFloor, tickFreqs);
-  else if (_visualizerStyle === 'eq') _renderVisualizerEQ(cache, fMax, freqFloor, tickFreqs);
-  else _renderVisualizerDisc(cache, fMax, freqFloor, tickFreqs);
-}
-
-// Disc style: the full time-resolved spectrogram wrapped into a circle —
-// frequency around the circumference, time as radius, colour as dB. Plotly
-// has no native polar heatmap, so this reuses the 3D 'surface' trace with
-// manually-computed (x,y) = (r·cosθ, r·sinθ) coordinates and colour driven
-// by surfacecolor instead of height (see _renderVisualizerLine below for
-// the other style, which uses a real 2D polar chart instead).
-function _renderVisualizerDisc(cache, fMax, freqFloor, tickFreqs) {
-  const { times, freqs, zDb } = cache;   // zDb: nFreq rows x nTime cols
-  const tMax = times[times.length - 1] || 1;
-  const innerR = 0.15;   // small hole at the centre so t=0 isn't a singular point
-  const outerR = 1;
-
-  // 0 Hz at 12 o'clock, sweeping clockwise up to fMax back at 12 o'clock —
-  // matches a clock face / dial, which is the natural reading direction for
-  // a circular frequency sweep.
-  const thetaOf = freq => Math.PI / 2 - 2 * Math.PI * _visualizerFreqFraction(freq, fMax, freqFloor);
-
-  // A flat surface (z constant everywhere) is degenerate geometry for
-  // Plotly's WebGL surface picker — it has no genuine normal to hit-test
-  // against. Giving z a small real variation (driven by dB) keeps it
-  // visually flat from the top-down camera while giving the picker
-  // something to work with, but Plotly's gl-surface3d hover fundamentally
-  // highlights an entire row/column of the parametric grid rather than a
-  // single point — that's inherent to the trace type, not fixable from
-  // here. The full-length tick gridlines below (per the request to add a
-  // "fine line that projects outward") are the practical workaround: a
-  // visual ruler to line a point up against instead of relying on hover.
-  const dbRange = _dataMinMax(zDb);
-  const dbSpan = (dbRange.max - dbRange.min) || 1;
-  const Z_SCALE = 0.05;
-
-  const x = [], y = [], z = [], customdata = [];
-  for (let i = 0; i < freqs.length; i++) {
-    const theta = thetaOf(freqs[i]);
-    const xRow = [], yRow = [], zRow = [], cdRow = [];
-    for (let j = 0; j < times.length; j++) {
-      const r = innerR + (outerR - innerR) * (tMax ? times[j] / tMax : 0);
-      xRow.push(r * Math.cos(theta));
-      yRow.push(r * Math.sin(theta));
-      zRow.push(Z_SCALE * (zDb[i][j] - dbRange.min) / dbSpan);
-      cdRow.push(freqs[i]);   // hover only needs frequency — see hovertemplate below
-    }
-    x.push(xRow); y.push(yRow); z.push(zRow); customdata.push(cdRow);
-  }
-
-  const muted = cssVar('--muted') || '#5a5f6a';
-  const textColor = cssVar('--text') || '#1a1a1a';
-
-  // thetaOf(0) === thetaOf(fMax) mod 2π — the sweep starts and wraps back
-  // at the exact same angle. A dotted spoke marks that seam.
-  const seamSpoke = (() => {
-    const th = thetaOf(0);
-    return {
-      type: 'scatter3d', mode: 'lines',
-      x: [innerR * Math.cos(th), outerR * Math.cos(th)],
-      y: [innerR * Math.sin(th), outerR * Math.sin(th)],
-      z: [0, 0],
-      line: { color: muted, width: 2, dash: 'dot' },
-      hoverinfo: 'skip', showlegend: false,
-    };
-  })();
-
-  // Full centre-to-edge gridlines at each reference frequency, not just a
-  // short dash at the rim — lets you visually trace where a frequency falls
-  // across the whole disc regardless of how precise hover is.
-  const tickX = [], tickY = [], tickZ = [];
-  for (const fq of tickFreqs) {
-    const th = thetaOf(fq);
-    tickX.push(innerR * Math.cos(th), outerR * Math.cos(th), null);
-    tickY.push(innerR * Math.sin(th), outerR * Math.sin(th), null);
-    tickZ.push(0, 0, null);
-  }
-  const tickMarks = {
-    type: 'scatter3d', mode: 'lines', x: tickX, y: tickY, z: tickZ,
-    line: { color: muted, width: 1, dash: 'dot' }, opacity: 0.55,
-    hoverinfo: 'skip', showlegend: false,
-  };
-
-  const seamLabelR = outerR + 0.2, tickLabelR = outerR + 0.14;
-  const eps = 0.08;   // radians — small angular offset so the two seam labels don't overlap
-  const seamFont = { size: 11, family: 'Arial, sans-serif', color: textColor };
-  const tickFont = { size: 9, family: 'Arial, sans-serif', color: muted };
-  const freqTickLabel = fq => fq >= 1000 ? `${fq / 1000}k` : `${fq}`;
-
-  // thetaOf() DECREASES as frequency increases (clockwise sweep), so the
-  // label sitting on the low-frequency side of the seam needs the smaller
-  // offset angle (minus eps) and the high-frequency side needs the larger
-  // one (plus eps) — swapped from that, each label ends up next to the
-  // wrong end of the actual data sweep even though the sweep itself is
-  // correctly clockwise.
-  const annotations = [
-    { x: seamLabelR * Math.cos(thetaOf(0) - eps), y: seamLabelR * Math.sin(thetaOf(0) - eps), z: 0,
-      text: '0 Hz', showarrow: false, font: seamFont },
-    { x: seamLabelR * Math.cos(thetaOf(0) + eps), y: seamLabelR * Math.sin(thetaOf(0) + eps), z: 0,
-      text: `${fMax.toFixed(0)} Hz`, showarrow: false, font: seamFont },
-    ...tickFreqs.map(fq => {
-      const th = thetaOf(fq);
-      return { x: tickLabelR * Math.cos(th), y: tickLabelR * Math.sin(th), z: 0,
-        text: freqTickLabel(fq), showarrow: false, font: tickFont };
-    }),
-  ];
-
-  const colorscale = document.getElementById('colorscale-sel').value;
-  // Tightened from the data's actual extent (rather than a fixed oversized
-  // box) so the disc fills more of the panel — Plotly's 3D camera framing
-  // is driven by axis range relative to content, not by outerR alone.
-  const range = seamLabelR + 0.08;
-  // Fixed across every loaded file (see _globalDbRange) rather than
-  // auto-scaled to whichever file is currently shown — otherwise the same
-  // colour could mean a different dB depending only on which checkbox was
-  // ticked, defeating a fast visual comparison between files.
-  const dbColorRange = _globalDbRange() || dbRange;
-  Plotly.react('visualizer-plot', [{
-    type: 'surface', x, y, z, surfacecolor: zDb, colorscale, showscale: true,
-    cmin: dbColorRange.min, cmax: dbColorRange.max,
-    colorbar: { title: 'dB', titleside: 'right', thickness: 10, tickfont: { size: 9 } },
-    customdata,
-    hovertemplate: 'Freq: %{customdata:.0f} Hz<br>Level: %{surfacecolor:.1f} dB<extra></extra>',
-    lighting: { ambient: 1, diffuse: 0, specular: 0 },   // flat colour, no 3D shading on the disc
-  }, seamSpoke, tickMarks], {
-    title: {
-      text: `Circular Spectrogram — frequency around the circumference (0–${fMax.toFixed(0)} Hz, ${_logFreq ? 'log' : 'linear'}), time as radius`,
-      font: { size: 11 }, pad: { t: 2, b: 0 },
-    },
-    font: { size: 10, family: 'inherit' },
-    paper_bgcolor: '#fff',
-    scene: {
-      xaxis: { visible: false, range: [-range, range] },
-      yaxis: { visible: false, range: [-range, range] },
-      zaxis: { visible: false, range: [-0.1, 0.2] },
-      aspectmode: 'manual', aspectratio: { x: 1, y: 1, z: 0.05 },
-      camera: { eye: { x: 0, y: 0, z: 1.5 }, up: { x: 0, y: 1, z: 0 } },
-      annotations,
-    },
-    margin: { l: 10, r: 10, t: 40, b: 10 },
-  }, _pcfg);
-}
-
-// A short centered moving average over the raw per-bin curve — "band"
-// meaning each point gets blended with its nearby neighbours in a small
-// frequency band, not a wide filter — so bin-to-bin noise doesn't dominate
-// the shape, which matters most when eyeballing two files' curves against
-// each other rather than reading one in isolation.
-function _bandSmooth(arr, windowFrac = 0.02) {
-  const n = arr.length;
-  const half = Math.max(1, Math.round(n * windowFrac / 2));
-  const out = new Array(n);
-  for (let i = 0; i < n; i++) {
-    let sum = 0, count = 0;
-    for (let j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) { sum += arr[j]; count++; }
-    out[i] = sum / count;
-  }
-  return out;
-}
-
-// Radial line style: one point per frequency bin, radius = that bin's
-// average dB across every time frame (same averaging _renderMirrorByFreq
-// already uses for its population-pyramid view), smoothed with a short
-// band average. Uses a real 2D Plotly polar chart (scatterpolar) instead of
-// the 3D surface trick the disc style needs — proper per-point hover (no
-// row/column highlighting), a native log/linear-capable radial axis, and
-// no WebGL picking quirks, since this is a much simpler shape (one line,
-// not a full time-resolved grid).
-function _renderVisualizerLine(cache, fMax, freqFloor, tickFreqs) {
-  const { freqs } = cache;
-  const avgDb = _bandSmooth(_avgSpectrum(cache));
-  const theta = freqs.map(fq => 360 * _visualizerFreqFraction(fq, fMax, freqFloor));
-  const accent = cssVar('--accent') || '#b35c00';
-  // Fixed across every loaded file (see _globalDbRange), not auto-scaled to
-  // this file's own average — otherwise the ring spacing itself would shift
-  // between files and a genuine level difference could look identical to a
-  // rescaled axis, defeating a fast visual comparison when flipping between
-  // two checked files.
-  const dbRadial = _globalDbRange();
-
-  // Both ends of the sweep land on the same angle (0°/360° are the same
-  // point), so — unlike the disc style's two offset labels — a single
-  // combined tick avoids two ticks stacking on top of each other, which
-  // Plotly's native angularaxis tickvals/ticktext has no built-in way to
-  // nudge apart the way free-form 3D scene annotations do.
-  const tickVals = [0, ...tickFreqs.map(fq => 360 * _visualizerFreqFraction(fq, fMax, freqFloor))];
-  const tickText = [`0 / ${fMax.toFixed(0)} Hz`, ...tickFreqs.map(fq => fq >= 1000 ? `${fq / 1000}k` : `${fq}`)];
-
-  Plotly.react('visualizer-plot', [{
-    type: 'scatterpolar', mode: 'lines', r: avgDb, theta,
-    line: { color: accent, width: 2 },
-    customdata: freqs,
-    hovertemplate: 'Freq: %{customdata:.0f} Hz<br>Level: %{r:.1f} dB<extra></extra>',
-  }], {
-    title: {
-      text: `Average dB per Frequency — frequency around the circumference (0–${fMax.toFixed(0)} Hz, ${_logFreq ? 'log' : 'linear'})`,
-      font: { size: 11 }, pad: { t: 2, b: 0 },
-    },
-    font: { size: 10, family: 'inherit' },
-    paper_bgcolor: '#fff',
-    polar: {
-      bgcolor: '#fff',
-      radialaxis: { title: 'dB', tickfont: { size: 9 },
-        range: dbRadial ? [dbRadial.min, dbRadial.max] : undefined },
-      angularaxis: {
-        rotation: 90, direction: 'clockwise', range: [0, 360],
-        tickvals: tickVals, ticktext: tickText, tickfont: { size: 9 },
-      },
-    },
-    margin: { l: 50, r: 50, t: 40, b: 40 },
-  }, _pcfg);
-}
-
-const N_EQ_BANDS = 24;
-
-// Band edges (in Hz) spanning freqFloor..fMax, evenly spaced in whichever
-// domain the Freq: Lin/Log toggle is currently using — evenly spaced in log
-// space on Log (so bands read like a real octave-style equalizer, narrower
-// at the low end) or evenly spaced in Hz on Linear — so each band ends up
-// the same angular width once mapped through _visualizerFreqFraction.
-function _eqBandEdges(fMax, freqFloor, n) {
-  const edges = new Array(n + 1);
-  if (_logFreq) {
-    const lo = Math.log(Math.max(freqFloor, 1e-9)), hi = Math.log(Math.max(fMax, freqFloor * 1.0001));
-    for (let i = 0; i <= n; i++) edges[i] = Math.exp(lo + (hi - lo) * i / n);
-  } else {
-    for (let i = 0; i <= n; i++) edges[i] = freqFloor + (fMax - freqFloor) * i / n;
-  }
-  return edges;
-}
-
-// Equalizer style: the spectrum bucketed into a fixed number of bands, each
-// drawn as a radial bar — the classic hardware-EQ look, mapped onto the
-// same clockwise-from-12-o'clock frequency sweep the other two styles use.
-// A native Plotly 'barpolar' trace does the actual bar geometry (no manual
-// (x,y) trick needed here, unlike Disc), with each bar's base pinned to the
-// fixed global dB floor (see _globalDbRange) and its far edge at that
-// band's own average level, so bar height reads directly as loudness on a
-// scale that stays put when switching files.
-function _renderVisualizerEQ(cache, fMax, freqFloor, tickFreqs) {
-  const { freqs } = cache;
-  const avgDb = _avgSpectrum(cache);
-  const edges = _eqBandEdges(fMax, freqFloor, N_EQ_BANDS);
-
-  const bandFreq = [], bandDb = [], theta = [], width = [];
-  for (let i = 0; i < N_EQ_BANDS; i++) {
-    const lo = edges[i], hi = edges[i + 1];
-    const center = _logFreq ? Math.sqrt(lo * hi) : (lo + hi) / 2;
-    let sum = 0, count = 0;
-    for (let k = 0; k < freqs.length; k++) if (freqs[k] >= lo && freqs[k] < hi) { sum += avgDb[k]; count++; }
-    let db;
-    if (count) {
-      db = sum / count;
-    } else {
-      // No bin landed inside this band — possible for the narrowest bands
-      // when the band grid is finer than the FFT's own frequency
-      // resolution, mostly at the low end on a log scale. Fall back to
-      // whichever single bin sits closest to the band's centre.
-      let bestK = 0, bestD = Infinity;
-      for (let k = 0; k < freqs.length; k++) { const d = Math.abs(freqs[k] - center); if (d < bestD) { bestD = d; bestK = k; } }
-      db = avgDb[bestK];
-    }
-    bandFreq.push(center);
-    bandDb.push(db);
-    theta.push(360 * _visualizerFreqFraction(center, fMax, freqFloor));
-    // A fraction of the band's true angular width, so a thin gap separates
-    // neighbouring bars like real EQ LEDs/faders rather than a solid ring.
-    const fracLo = _visualizerFreqFraction(lo, fMax, freqFloor), fracHi = _visualizerFreqFraction(hi, fMax, freqFloor);
-    width.push(Math.abs(fracHi - fracLo) * 360 * 0.85);
-  }
-
-  const dbRadial = _globalDbRange();
-  const colorscale = document.getElementById('colorscale-sel').value;
-
-  const tickVals = [0, ...tickFreqs.map(fq => 360 * _visualizerFreqFraction(fq, fMax, freqFloor))];
-  const tickText = [`0 / ${fMax.toFixed(0)} Hz`, ...tickFreqs.map(fq => fq >= 1000 ? `${fq / 1000}k` : `${fq}`)];
-
-  Plotly.react('visualizer-plot', [{
-    type: 'barpolar', r: bandDb, theta, width,
-    base: dbRadial ? dbRadial.min : undefined,
-    marker: {
-      color: bandDb, colorscale,
-      cmin: dbRadial ? dbRadial.min : undefined, cmax: dbRadial ? dbRadial.max : undefined,
-      showscale: true, colorbar: { title: 'dB', titleside: 'right', thickness: 10, tickfont: { size: 9 } },
-      line: { width: 0 },
-    },
-    customdata: bandFreq,
-    hovertemplate: 'Freq: %{customdata:.0f} Hz<br>Level: %{r:.1f} dB<extra></extra>',
-  }], {
-    title: {
-      text: `Equalizer — ${N_EQ_BANDS} bands around the circumference (0–${fMax.toFixed(0)} Hz, ${_logFreq ? 'log' : 'linear'}), bar height is band-averaged dB`,
-      font: { size: 11 }, pad: { t: 2, b: 0 },
-    },
-    font: { size: 10, family: 'inherit' },
-    paper_bgcolor: '#fff',
-    showlegend: false,
-    polar: {
-      bgcolor: '#fff',
-      radialaxis: { title: 'dB', tickfont: { size: 9 },
-        range: dbRadial ? [dbRadial.min, dbRadial.max] : undefined },
-      angularaxis: {
-        rotation: 90, direction: 'clockwise', range: [0, 360],
-        tickvals: tickVals, ticktext: tickText, tickfont: { size: 9 },
-      },
-    },
-    margin: { l: 50, r: 50, t: 40, b: 40 },
-  }, _pcfg);
 }
 
 function _diffTitle() {
@@ -1144,16 +767,13 @@ window.specSetMode = function(mode) {
   document.getElementById('mode-single-btn').classList.toggle('active', mode === 'single');
   document.getElementById('mode-diff-btn').classList.toggle('active', mode === 'diff');
   document.getElementById('mode-live-btn').classList.toggle('active', mode === 'live');
-  document.getElementById('mode-visualizer-btn').classList.toggle('active', mode === 'visualizer');
   document.getElementById('compare-view').style.display =
-    (mode === 'diff' || mode === 'live' || mode === 'visualizer') ? 'none' : '';
+    (mode === 'diff' || mode === 'live') ? 'none' : '';
   document.getElementById('diff-view').style.display = mode === 'diff' ? '' : 'none';
   document.getElementById('live-view').style.display = mode === 'live' ? '' : 'none';
-  document.getElementById('visualizer-view').style.display = mode === 'visualizer' ? '' : 'none';
   _updateMirrorAxisBtn();
   _updateMirror3DBtn();
   _updateMirrorStyleBtn();
-  _updateVisualizerStyleBtn();
   // Leaving Live mode releases the mic promptly rather than leaving it hot
   // in the background — same reasoning as the beforeunload safety net below.
   if (prevMode === 'live' && mode !== 'live' && _liveActive) stopLiveView();
@@ -1168,10 +788,6 @@ window.specSetMode = function(mode) {
     if (el) setTimeout(() => Plotly.Plots.resize(el), 0);
   } else if (mode === 'live') {
     const el = document.getElementById('live-plot');
-    if (el) setTimeout(() => Plotly.Plots.resize(el), 0);
-  } else if (mode === 'visualizer') {
-    _renderVisualizer();
-    const el = document.getElementById('visualizer-plot');
     if (el) setTimeout(() => Plotly.Plots.resize(el), 0);
   }
 };
@@ -1272,8 +888,8 @@ function _toggleCompareSelect(id, checked) {
   if (checked && _files.filter(x => x.compareSelected).length >= MAX_COMPARE) checked = false;   // cap
   f.compareSelected = checked;
   _renderFileList();
-  // This checkbox drives Compare's row set, Single's pick, and Visualizer's
-  // pick, so any of those modes may need a refresh.
+  // This checkbox drives Compare's row set and Single's pick, so either
+  // mode may need a refresh.
   _refreshCurrentView();
 }
 
@@ -1617,7 +1233,7 @@ function _initResizer() {
     if (!dragging) return;
     const w = Math.max(160, Math.min(360, startW + (e.clientX - startX)));
     sidebar.style.width = w + 'px';
-    const ids = ['diff-plot', 'live-plot', 'visualizer-plot', ..._panelIdsForMode().map(id => `spec-plot-${id}`)];
+    const ids = ['diff-plot', 'live-plot', ..._panelIdsForMode().map(id => `spec-plot-${id}`)];
     ids.forEach(pid => {
       const el = document.getElementById(pid);
       if (el && el.data) Plotly.Plots.resize(el);

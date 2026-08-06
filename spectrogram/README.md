@@ -47,7 +47,6 @@ Five view modes, via the toolbar:
   selected is a no-op — untick one first.
 - **⛰ Difference** — see below.
 - **🎙 Live** — see "Live view" below.
-- **🌀 Visualizer** — see "Visualizer" below.
 
 FFT window size, hop size, max frequency, **frequency smoothing**, and
 colorscale live in the **⚙️ FFT Settings** button (top right) and apply to
@@ -169,73 +168,6 @@ two, same as during a recording. There's only one physical microphone, so
 Live and Recording are mutually exclusive — each disables the other's
 controls while active — and leaving Live mode (or closing the tab) stops it
 and releases the mic automatically.
-
-### Visualizer
-
-Toggle **🌀 Visualizer** for a circular take on the same spectrogram data.
-Frequency always runs **around the circumference, starting at 12 o'clock and
-sweeping clockwise** (like a dial) from 0 Hz up to the file's max frequency,
-honoring the same **Freq: Lin/Log** toolbar toggle the rest of the tool uses
-— switching it changes the angular spacing here too (on a log scale, 0 Hz
-has no distinct position, same as any log-frequency axis, so it clamps to
-the first real bin). It shows whichever file Single would show (the topmost
-sidebar-checked one) — there's no separate picker, so ticking a different
-file's checkbox updates both at once. A second toolbar button cycles
-**Visualizer: Disc → Visualizer: Line → Visualizer: Equalizer** through
-three styles:
-
-- **Disc** — the full time-resolved spectrogram wrapped into a ring: time is
-  the radius (centre = start, edge = end) and colour is dB, same as Heatmap.
-  A dotted spoke plus **"0 Hz"**/**"‹max› Hz"** labels mark the seam at the
-  top where the sweep starts and wraps back around, and full centre-to-edge
-  reference gridlines (not just rim ticks) at 200, 400, 600, 1k, 2k, 3k, 5k,
-  7k Hz (whichever fall under the file's max frequency) let you trace a
-  frequency across the whole disc. Plotly's 3D `surface` hover highlights an
-  entire row/column of the grid rather than a single point — an inherent
-  limitation of that trace type, not something fixable from the data side —
-  so treat the gridlines, not hover, as the precise way to read a frequency
-  off the Disc; the popup that does appear still reports frequency and dB.
-- **Line** — a single radial line: one point per frequency bin, radius is
-  that bin's dB averaged across the whole file, then run through a short
-  band-average (each point blended with its near neighbours) to smooth out
-  bin-to-bin noise so the overall shape reads clearly. This is a native 2D
-  polar chart (not the 3D surface trick Disc needs), so hover is precise,
-  point-by-point, with no row/column highlighting.
-- **Equalizer** — the classic hardware-EQ look: the spectrum bucketed into
-  24 bands around the same clockwise dial, each drawn as a radial bar whose
-  height is that band's average dB and whose colour also tracks level
-  (via the selected colorscale), so louder bands both stand taller and
-  read hotter. Bands are spaced evenly in whichever domain Freq: Lin/Log is
-  currently using — even in Hz on Linear, even in octaves on Log (narrower
-  bands at the low end, like a real graphic equalizer) — with a small gap
-  between bars so they read as discrete LEDs/faders rather than a solid
-  ring. Built on a native Plotly `barpolar` trace, so — like Line — hover
-  is precise and per-bar, not the Disc's row/column highlighting.
-
-Disc reuses the 3D `surface` machinery the tool already relies on
-elsewhere: `(x, y)` computed per grid point as `(r·cosθ, r·sinθ)` instead of
-the usual straight-line time/frequency coordinates, colour driven by
-`surfacecolor` instead of height, with flat lighting so it reads as pure
-colour rather than a shaded 3D object, and a tightened axis range (hugging
-the disc's actual extent rather than a fixed oversized box) so it fills
-more of the panel. The **View** selector (Heatmap/3D Surface/Waterfall/
-Mirror) doesn't apply here — Visualizer is its own fixed layout, not one
-more Plot type option.
-
-All three styles' dB scale — Disc's colour range, Line's radial-axis range,
-and Equalizer's radial-axis range plus bar-colour range — is fixed across
-every loaded file rather than auto-scaled to whichever one is currently
-shown. Without that, the same colour, ring, or bar height could mean a
-different dB depending only on which file's checkbox happened to be
-ticked, which would defeat a fast side-by-side comparison; checking a
-different file re-shows the plot at the exact same scale, so a genuine
-level difference actually looks different instead of both files getting
-independently stretched to fill the same visual range. The scale only
-moves when a file is actually loaded or removed, never from switching or
-checking/unchecking which one is displayed. Compare mode's Heatmap/3D
-Surface panels share this same fixed, whole-library dB range for the same
-reason — every panel (and a lone panel left after unchecking others) reads
-off one constant scale rather than each auto-normalizing to its own data.
 
 All signal processing is delegated to the canonical ObieApp Python modules,
 loaded live from GitHub at runtime — none of it is reimplemented here (see
